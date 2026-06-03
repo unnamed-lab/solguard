@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# build
+dist/
+
+# env / secrets
+.env
+.env.local
+*.key
+wallet*.json
+keypair*.json
+
+# runtime logs (append-only ledgers are generated, not committed)
+logs/*.jsonl
+state/
+
+# misc
+*.log
+.DS_Store
