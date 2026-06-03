@@ -11,6 +11,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.32.1
         version: 0.32.1
+      '@grpc/grpc-js':
+        specifier: ^1.14.4
+        version: 1.14.4
       '@solana/web3.js':
         specifier: ^1.95.4
         version: 1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
