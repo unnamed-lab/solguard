@@ -25,26 +25,30 @@ Resilient Stream Manager + monorepo skeleton.
 
 ## Phase 1 — Observability · Days 3–5 · owner: `@unassigned`
 
-- [ ] Slot subscription across all commitment levels (wired; verify transitions)
-- [ ] Congestion Oracle: skip rate + processed→confirmed delta p50/p95 → `congestion_multiplier` (`src/network/congestion.ts`)
-- [ ] Leader Window Detector: leader schedule cache + next Jito leader + `inSubmitWindow` (`src/network/leader.ts`)
-- [ ] Terminal dashboard skeleton (`src/dashboard/ui.ts`)
+- [x] Slot subscription across all commitment levels (wired in orchestrator)
+- [x] Congestion Oracle: skip rate + processed→confirmed delta p50/p95 → `congestion_multiplier` (`src/network/congestion.ts`)
+- [x] Leader Window Detector: leader schedule cache + next Jito leader + `inSubmitWindow` (`src/network/leader.ts`)
+- [x] Terminal dashboard (`src/dashboard/ui.ts`)
+- [ ] **Verify against live endpoints** (needs credentials); capture oracle numbers for README Q1
 - [ ] **DoD:** dashboard shows live slots + live congestion reading; oracle numbers logged for README Q1.
 
 ## Phase 2 — Bundle pipeline · Days 6–9 · owner: `@unassigned`
 
-- [ ] `getTipAccounts` fetch + cache; random selection per bundle (`src/bundle/`)
-- [ ] `tip_floor` fetch + cache (~60s TTL) (`src/tips/tipFloor.ts`)
-- [ ] Tip model `tip = percentile × congestion_multiplier`, ceiling-bounded (`src/tips/model.ts`)
-- [ ] Bundle builder: ≤5 tx, tip in last tx, shared `confirmed` blockhash (`src/bundle/builder.ts`)
-- [ ] Regional submitter + 0–2 fallbacks (`src/bundle/submitter.ts`)
+- [x] `getTipAccounts` fetch + cache; random selection per bundle (`src/bundle/builder.ts`, `src/jito/client.ts`)
+- [x] `tip_floor` fetch + cache (~60s TTL) (`src/tips/tipFloor.ts`)
+- [x] Tip model `tip = percentile × congestion_multiplier`, ceiling-bounded (`src/tips/model.ts`)
+- [x] Bundle builder: ≤5 tx, tip in last tx, shared `confirmed` blockhash (`src/bundle/builder.ts`)
+- [x] Regional submitter + 0–2 fallbacks (`src/bundle/submitter.ts`, `src/jito/client.ts`)
+- [ ] **Land a real bundle** with a dynamically computed tip (needs funded wallet)
+- [x] `pnpm lint:tips` passes
 - [ ] **DoD:** a real bundle lands with a dynamically computed tip; `pnpm lint:tips` passes.
 
 ## Phase 3 — Lifecycle + reconciliation · Days 10–13 · owner: `@unassigned`
 
-- [ ] Lifecycle Tracker: 4 stages, slots, ts, deltas, keyed by signature (`src/lifecycle/tracker.ts`)
-- [ ] Stream-primary confirmation; status-API reconciliation (`src/bundle/status.ts`)
-- [ ] Failure Classifier: 5 classes + evidence (`src/lifecycle/classifier.ts`)
+- [x] Lifecycle Tracker: 4 stages, slots, ts, deltas, keyed by signature; stream-driven stage promotion (`src/lifecycle/tracker.ts`)
+- [x] Stream-primary confirmation; status-API reconciliation (`src/bundle/status.ts`)
+- [x] Failure Classifier: 5 classes + evidence (`src/lifecycle/classifier.ts`)
+- [ ] **Verify** a real landed bundle yields a complete lifecycle entry (needs live run)
 - [ ] **DoD:** a landed bundle yields a complete lifecycle entry with explorer-verifiable slots; a failed bundle is classified correctly.
 
 ## Phase 4 — AI agent + ledger · Days 14–18 · owner: `@unassigned`
