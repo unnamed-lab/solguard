@@ -1,9 +1,8 @@
-import Client, {
-  CommitmentLevel,
-  type SubscribeUpdate,
-  type SubscribeRequest,
-} from "@triton-one/yellowstone-grpc";
+import Yellowstone, { CommitmentLevel } from "@triton-one/yellowstone-grpc";
+import type { default as ClientClass, SubscribeUpdate, SubscribeRequest } from "@triton-one/yellowstone-grpc";
 import type { ClientDuplexStream } from "@grpc/grpc-js";
+
+const Client = (Yellowstone as unknown as { default: typeof ClientClass }).default;
 import bs58 from "bs58";
 
 import { config } from "../config.js";
@@ -41,7 +40,7 @@ function mapSlotStatus(status: number | undefined): Commitment {
  */
 export class StreamManager {
   readonly queue: BoundedQueue<StreamEvent>;
-  private client: Client;
+  private client: ClientClass;
   private stream?: ClientDuplexStream<SubscribeRequest, SubscribeUpdate>;
   private state: SlotState;
 
