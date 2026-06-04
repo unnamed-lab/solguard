@@ -22,13 +22,6 @@ interface JsonRpcResponse<T> {
   error?: { code: number; message: string; data?: unknown };
 }
 
-export interface NextScheduledLeader {
-  currentSlot: number;
-  nextLeaderSlot: number;
-  nextLeaderIdentity: string;
-  nextLeaderRegion?: string;
-}
-
 export type InflightStatus = "Invalid" | "Pending" | "Failed" | "Landed";
 
 export interface InflightBundleStatus {
@@ -54,11 +47,6 @@ export class JitoClient {
   /** 8 static tip accounts; caller picks one at random per bundle (FR-10). */
   async getTipAccounts(): Promise<string[]> {
     return this.rpc<string[]>("/api/v1/bundles", "getTipAccounts", []);
-  }
-
-  /** Next scheduled Jito leader + slot, used for the submit window (FR-6). */
-  async getNextScheduledLeader(): Promise<NextScheduledLeader> {
-    return this.rpc<NextScheduledLeader>("/api/v1/bundles", "getNextScheduledLeader", []);
   }
 
   /**

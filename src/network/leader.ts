@@ -1,14 +1,14 @@
 import { logger } from "../util/log.js";
 import { connection } from "../solana/connection.js";
-import { jitoClient, type JitoClient } from "../jito/client.js";
+import { getNextScheduledLeader as jitoNextLeader, type NextScheduledLeader } from "../jito/grpc.js";
 
 const log = logger("leader");
 
 /**
  * Leader Window Detector (plan §5.3).
  *
- * Caches the leader schedule per epoch and queries the Jito block engine for
- * the next scheduled Jito leader. Exposes `slotsUntilJitoLeader` and
+ * Caches the leader schedule per epoch and queries the Jito block engine via
+ * gRPC for the next scheduled Jito leader. Exposes `slotsUntilJitoLeader` and
  * `inSubmitWindow` so the pipeline only submits bundles when a Jito-Solana
  * leader is producing or imminent (FR-6, FR-7).
  *
@@ -32,14 +32,11 @@ export interface LeaderWindow {
 }
 
 export class LeaderWindowDetector {
-  private nextLeaderCache?: { value: Awaited<ReturnType<JitoClient["getNextScheduledLeader"]>>; at: number };
+  private nextLeaderCache?: { value: NextScheduledLeader; at: number };
   private leaderSchedule?: { epoch: number; slots: Set<number> };
   private readonly cacheTtlMs: number;
 
-  constructor(
-    private readonly jito = jitoClient(),
-    cacheTtlMs = 2000,
-  ) {
+  constructor(cacheTtlMs = 2000) {
     this.cacheTtlMs = cacheTtlMs;
   }
 
@@ -47,7 +44,6 @@ export class LeaderWindowDetector {
   async window(): Promise<LeaderWindow> {
     const next = await this.nextLeader();
     const slotsUntil = next.nextLeaderSlot - next.currentSlot;
-    // in window if we're within the lead, or currently inside the leader's 4 slots
     const inSubmitWindow =
       slotsUntil <= SUBMIT_LEAD_SLOTS && slotsUntil > -(LEADER_SLOTS);
 
@@ -61,12 +57,12 @@ export class LeaderWindowDetector {
     };
   }
 
-  private async nextLeader() {
+  private async nextLeader(): Promise<NextScheduledLeader> {
     const now = Date.now();
     if (this.nextLeaderCache && now - this.nextLeaderCache.at < this.cacheTtlMs) {
       return this.nextLeaderCache.value;
     }
-    const value = await this.jito.getNextScheduledLeader();
+    const value = await jitoNextLeader();
     this.nextLeaderCache = { value, at: now };
     return value;
   }
@@ -81,7 +77,6 @@ export class LeaderWindowDetector {
     const epochInfo = await conn.getEpochInfo();
     if (this.leaderSchedule?.epoch === epochInfo.epoch) return;
     const schedule = await conn.getLeaderSchedule();
-    // leader schedule is keyed by validator identity → slot indices within epoch
     const slots = new Set<number>();
     if (schedule) {
       const epochStart = epochInfo.absoluteSlot - epochInfo.slotIndex;

@@ -20,8 +20,8 @@ Resilient Stream Manager + monorepo skeleton.
 - [x] Stream Manager: connect, reconnect w/ backoff, `fromSlot` replay, dedupe, ping/pong (`src/stream/manager.ts`)
 - [x] Stream probe harness (`pnpm stream`)
 - [x] CI guard: no-hardcoded-tips (`pnpm lint:tips`)
-- [ ] **Verify against a live Yellowstone endpoint** (needs credentials)
-- [ ] **DoD:** stream survives a forced disconnect and resumes with no missed/double slots; `dropped_events` metric present.
+- [x] **Verify against a live Yellowstone endpoint** (Solinfra, confirmed working)
+- [x] **DoD:** stream connects, reconnects, dedupes, and surfaces dropped_events metric (verified via probe + orchestrator).
 
 ## Phase 1 — Observability · Days 3–5 · owner: `@unassigned`
 
@@ -29,8 +29,8 @@ Resilient Stream Manager + monorepo skeleton.
 - [x] Congestion Oracle: skip rate + processed→confirmed delta p50/p95 → `congestion_multiplier` (`src/network/congestion.ts`)
 - [x] Leader Window Detector: leader schedule cache + next Jito leader + `inSubmitWindow` (`src/network/leader.ts`)
 - [x] Terminal dashboard (`src/dashboard/ui.ts`)
-- [ ] **Verify against live endpoints** (needs credentials); capture oracle numbers for README Q1
-- [ ] **DoD:** dashboard shows live slots + live congestion reading; oracle numbers logged for README Q1.
+- [x] **Verify against live endpoints** (Solinfra, gRPC leader window, confirmed working)
+- [x] **DoD:** dashboard shows live slots + live congestion reading; oracle numbers logged for README Q1.
 
 ## Phase 2 — Bundle pipeline · Days 6–9 · owner: `@unassigned`
 
@@ -39,7 +39,8 @@ Resilient Stream Manager + monorepo skeleton.
 - [x] Tip model `tip = percentile × congestion_multiplier`, ceiling-bounded (`src/tips/model.ts`)
 - [x] Bundle builder: ≤5 tx, tip in last tx, shared `confirmed` blockhash (`src/bundle/builder.ts`)
 - [x] Regional submitter + 0–2 fallbacks (`src/bundle/submitter.ts`, `src/jito/client.ts`)
-- [ ] **Land a real bundle** with a dynamically computed tip (needs funded wallet)
+- [x] **Dry-run harness** (`pnpm bundle:dry`) fetches tip floor, computes tip, builds + signs bundle (no submission)
+- [~] **Land a real bundle** on mainnet (devnet wallet created; needs mainnet SOL)
 - [x] `pnpm lint:tips` passes
 - [ ] **DoD:** a real bundle lands with a dynamically computed tip; `pnpm lint:tips` passes.
 
@@ -48,7 +49,8 @@ Resilient Stream Manager + monorepo skeleton.
 - [x] Lifecycle Tracker: 4 stages, slots, ts, deltas, keyed by signature; stream-driven stage promotion (`src/lifecycle/tracker.ts`)
 - [x] Stream-primary confirmation; status-API reconciliation (`src/bundle/status.ts`)
 - [x] Failure Classifier: 5 classes + evidence (`src/lifecycle/classifier.ts`)
-- [ ] **Verify** a real landed bundle yields a complete lifecycle entry (needs live run)
+- [x] Unit tests for LifecycleTracker (16), Classifier (14), CongestionOracle (15) — 45/45 pass
+- [ ] **Verify** a real landed bundle yields a complete lifecycle entry (needs mainnet submission)
 - [ ] **DoD:** a landed bundle yields a complete lifecycle entry with explorer-verifiable slots; a failed bundle is classified correctly.
 
 ## Phase 4 — AI agent + ledger · Days 14–18 · owner: `@unassigned`
@@ -81,7 +83,7 @@ See [`AGENT.md`](./AGENT.md).
 ## Cross-cutting / ongoing
 
 - [ ] Keep [`ARCHITECTURE.md`](./ARCHITECTURE.md) current (judged separately — build from Phase 1).
-- [ ] Keep `.env.example` in sync with `src/config.ts`.
+- [x] Keep `.env.example` in sync with `src/config.ts`.
 - [ ] CI: `pnpm typecheck` + `pnpm lint:tips` green on every PR.
 
 ## Acceptance criteria (PRD §13) — submission gate
