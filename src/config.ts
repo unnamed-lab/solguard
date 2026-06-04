@@ -43,6 +43,10 @@ export const config = {
     ws: opt("RPC_WS_URL", ""),
   },
 
+  solinfra: {
+    apiKey: opt("SOLINFRA_API_KEY", ""),
+  },
+
   yellowstone: {
     url: req("YELLOWSTONE_GRPC_URL"),
     xToken: opt("YELLOWSTONE_X_TOKEN", ""),
