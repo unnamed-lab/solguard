@@ -7,6 +7,8 @@ const log = logger("ledger");
 export interface DecisionLedgerEntry {
   ts: string;
   trigger: "real_failure" | "injected_fault";
+  /** Provenance of the decision: live_model | local_mock | grounded_fallback | safe_abort. */
+  decision_source: "live_model" | "local_mock" | "grounded_fallback" | "safe_abort";
   input_context: AgentInput;
   raw_reasoning: string;
   validated_decision: AgentOutput | null;

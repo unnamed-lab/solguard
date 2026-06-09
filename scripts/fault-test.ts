@@ -28,6 +28,32 @@ import { readFileSync, existsSync } from "node:fs";
 
 const log = logger("fault-test");
 
+/**
+ * Evidence mode. Pass `--evidence` (or set FAULT_TEST_EVIDENCE=1) when producing
+ * decisions you intend to submit as proof of the AI agent. In this mode the
+ * harness FAILS if any agent decision did not come from the live model
+ * (decision_source !== "live_model"), so deterministic local-policy fallbacks
+ * can never be mistaken for genuine model reasoning in the ledger.
+ */
+const EVIDENCE_MODE =
+  process.argv.includes("--evidence") || process.env.FAULT_TEST_EVIDENCE === "1";
+
+const fallbackSources: string[] = [];
+
+/** Record provenance and, in evidence mode, reject non-live decisions immediately. */
+function assertProvenance(label: string, source: string): void {
+  if (source !== "live_model") {
+    fallbackSources.push(`${label}: ${source}`);
+    if (EVIDENCE_MODE) {
+      throw new Error(
+        `EVIDENCE MODE: decision "${label}" came from "${source}", not the live model. ` +
+          `Set a valid ANTHROPIC_API_KEY and re-run. Refusing to treat fallback decisions as AI evidence.`,
+      );
+    }
+    log.warn(`Decision "${label}" used non-live source "${source}" (not evidence-grade)`);
+  }
+}
+
 // A mock simulator state to track slot and tx streaming during testing
 interface SimState {
   currentSlot: number;
@@ -48,6 +74,11 @@ async function runTestHarness() {
   log.info("=================================================");
   log.info("       SOLGUARD FAULT INJECTION HARNESS          ");
   log.info("=================================================");
+  log.info(
+    EVIDENCE_MODE
+      ? "Running in EVIDENCE MODE: every agent decision must come from the live model."
+      : "Running in DEV MODE: local-policy fallbacks are allowed (pass --evidence for evidence-grade runs).",
+  );
 
   // Initialize components
   const tracker = new LifecycleTracker("logs/lifecycle.jsonl");
@@ -245,6 +276,7 @@ async function runTestHarness() {
 
   log.info("Calling AI Agent for decision...");
   const agentDecision = await agent.decide(agentInput, "injected_fault");
+  assertProvenance("blockhash_expired", agentDecision.decision_source);
 
   log.info(`AI Decision Diagnosis: "${agentDecision.diagnosis}"`);
   log.info(`AI Decision Action: ${agentDecision.action.toUpperCase()}`);
@@ -368,6 +400,7 @@ async function runTestHarness() {
   };
 
   const lowTipAgentDecision = await agent.decide(lowTipAgentInput, "injected_fault");
+  assertProvenance("fee_too_low", lowTipAgentDecision.decision_source);
   log.info(`AI Decision Diagnosis: "${lowTipAgentDecision.diagnosis}"`);
   log.info(`AI Decision Action: ${lowTipAgentDecision.action.toUpperCase()}`);
   log.info(`AI Decision Params: refresh_blockhash=${lowTipAgentDecision.params.refresh_blockhash}, new_tip=${lowTipAgentDecision.params.new_tip_lamports} lamports`);
@@ -429,6 +462,7 @@ async function runTestHarness() {
   };
 
   const computeAgentDecision = await agent.decide(computeAgentInput, "injected_fault");
+  assertProvenance("compute_exceeded", computeAgentDecision.decision_source);
   log.info(`AI Decision Diagnosis: "${computeAgentDecision.diagnosis}"`);
   log.info(`AI Decision Action: ${computeAgentDecision.action.toUpperCase()}`);
   log.info(`AI Decision Params: refresh_blockhash=${computeAgentDecision.params.refresh_blockhash}, new_tip=${computeAgentDecision.params.new_tip_lamports} lamports`);
@@ -454,6 +488,17 @@ async function runTestHarness() {
   } else {
     throw new Error("Decision ledger file decisions.jsonl was not found");
   }
+
+  log.info("\n-------------------------------------------------");
+  if (fallbackSources.length === 0) {
+    log.info("Decision provenance: all decisions came from the live model.");
+  } else {
+    log.warn(
+      `Decision provenance: ${fallbackSources.length} decision(s) used a non-live source ` +
+        `[${fallbackSources.join(", ")}]. NOT evidence-grade — re-run with --evidence and a valid key.`,
+    );
+  }
+  log.info("-------------------------------------------------");
 
   log.info("\n=================================================");
   log.info("   ✔ ALL FAULT INJECTION SCENARIOS VERIFIED.     ");

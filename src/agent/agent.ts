@@ -12,6 +12,18 @@ import { decisionLedger } from "./ledger.js";
 
 const log = logger("agent");
 
+/**
+ * Provenance of a decision, so evidence runs can prove a result came from the
+ * live model rather than the deterministic local policy.
+ *  - live_model:        parsed + validated from a real Anthropic response
+ *  - local_mock:        no API key configured; grounded local policy used by design
+ *  - grounded_fallback: API key present but unreachable/garbage; degraded to local policy
+ *  - safe_abort:        even the grounded policy was invalid; last-resort abort
+ */
+export type DecisionSource = "live_model" | "local_mock" | "grounded_fallback" | "safe_abort";
+
+export type AgentDecision = AgentOutput & { decision_source: DecisionSource };
+
 export class AIAgentClient {
   private anthropic?: Anthropic;
 
@@ -33,7 +45,7 @@ export class AIAgentClient {
   async decide(
     input: AgentInput,
     triggerType: "real_failure" | "injected_fault" = "real_failure",
-  ): Promise<AgentOutput> {
+  ): Promise<AgentDecision> {
     if (!validateAgentInput(input)) {
       throw new Error("Invalid AgentInput context payload provided");
     }
@@ -47,6 +59,7 @@ export class AIAgentClient {
     let decision: AgentOutput | null = null;
     let rawReasoning = "";
     let guardrailAction: "accepted" | "re-prompted" | "rejected" = "accepted";
+    let decisionSource: DecisionSource = this.anthropic ? "live_model" : "local_mock";
     let attempts = 0;
     const maxAttempts = 3;
 
@@ -62,17 +75,43 @@ export class AIAgentClient {
         if (this.anthropic) {
           // Live path using Claude
           const systemPrompt = this.getSystemPrompt();
-          const response = await this.anthropic.messages.create({
-            model: config.anthropic.model,
-            max_tokens: 1024,
-            system: systemPrompt,
-            messages: messages.map((m) => ({ role: m.role, content: m.content })),
-          });
+          let responseText: string;
+          try {
+            const response = await this.anthropic.messages.create({
+              model: config.anthropic.model,
+              max_tokens: 1024,
+              system: systemPrompt,
+              messages: messages.map((m) => ({ role: m.role, content: m.content })),
+            });
 
-          const responseText = response.content
-            .filter((c) => c.type === "text")
-            .map((c) => (c as any).text)
-            .join("\n");
+            responseText = response.content
+              .filter((c) => c.type === "text")
+              .map((c) => (c as any).text)
+              .join("\n");
+          } catch (apiErr) {
+            // Transport/auth failure (bad or missing key, network, rate limit):
+            // re-prompting the same unreachable endpoint cannot help, so don't
+            // burn the remaining attempts and don't blanket-abort. Degrade once
+            // to a grounded, guardrail-checked local decision so the pipeline
+            // still produces an input-grounded result.
+            log.warn("Anthropic API call failed; degrading to grounded local decision", {
+              attempt: attempts,
+              error: String(apiErr),
+            });
+            const fallback = this.generateMockDecision(input);
+            const fbErrors = validateAgentOutput(fallback);
+            const fbRails = checkGuardrails(fallback, input);
+            if (fbErrors.length === 0 && fbRails.valid) {
+              decision = fallback;
+              rawReasoning = `[grounded-fallback: Anthropic API unavailable] ${String(apiErr)}\n${JSON.stringify(fallback, null, 2)}`;
+              guardrailAction = "accepted";
+              decisionSource = "grounded_fallback";
+              break;
+            }
+            // Grounded fallback somehow invalid — let the post-loop safe abort handle it.
+            decision = null;
+            break;
+          }
 
           rawReasoning = responseText;
           decision = this.cleanAndParseJson(responseText);
@@ -115,29 +154,46 @@ export class AIAgentClient {
     }
 
     if (!decision) {
-      guardrailAction = "rejected";
       log.error("AI agent failed to generate a valid decision after multiple attempts");
-      // Create a fallback safe "abort" decision instead of crashing the stack
-      decision = {
-        diagnosis: "AI Agent failed to construct a valid safety-compliant decision after multiple retries.",
-        root_cause: input.failure?.type ?? "simulation_failed",
-        action: "abort",
-        params: {
-          refresh_blockhash: false,
-          new_tip_lamports: input.network.tip_floor.p25,
-          tip_percentile_target: 25,
-          submit_at_slot: input.network.current_slot,
-          max_blockhash_age_slots: 60,
-        },
-        confidence: 0.0,
-        expected_outcome: "Safety abort to prevent loss of funds or infinite loop.",
-      };
+      // The live model never produced a valid decision (unreachable endpoint,
+      // proxy junk like "Access Denied", or persistently malformed output).
+      // Prefer the grounded, input-derived local policy — it still varies
+      // behavior by failure type and passes the guardrails — over abandoning
+      // the bundle with a blanket abort.
+      const grounded = this.generateMockDecision(input);
+      const gErrors = validateAgentOutput(grounded);
+      const gRails = checkGuardrails(grounded, input);
+      if (gErrors.length === 0 && gRails.valid) {
+        guardrailAction = "accepted";
+        decisionSource = "grounded_fallback";
+        rawReasoning = `[grounded-fallback: live agent produced no valid decision after ${maxAttempts} attempts]\n${rawReasoning}`;
+        decision = grounded;
+      } else {
+        // Last resort: a safe abort, only if even the grounded policy is invalid.
+        guardrailAction = "rejected";
+        decisionSource = "safe_abort";
+        decision = {
+          diagnosis: "AI Agent failed to construct a valid safety-compliant decision after multiple retries.",
+          root_cause: input.failure?.type ?? "simulation_failed",
+          action: "abort",
+          params: {
+            refresh_blockhash: false,
+            new_tip_lamports: input.network.tip_floor.p25,
+            tip_percentile_target: 25,
+            submit_at_slot: input.network.current_slot,
+            max_blockhash_age_slots: 60,
+          },
+          confidence: 0.0,
+          expected_outcome: "Safety abort to prevent loss of funds or infinite loop.",
+        };
+      }
     }
 
     // Append to decision ledger logs
     decisionLedger().append({
       ts: new Date().toISOString(),
       trigger: triggerType,
+      decision_source: decisionSource,
       input_context: input,
       raw_reasoning: rawReasoning,
       validated_decision: decision,
@@ -146,7 +202,9 @@ export class AIAgentClient {
       eventual_outcome: decision.expected_outcome,
     });
 
-    return decision;
+    // Surface provenance on the returned decision so callers (e.g. the
+    // evidence harness) can reject runs that did not come from the live model.
+    return { ...decision, decision_source: decisionSource };
   }
 
   private getSystemPrompt(): string {
