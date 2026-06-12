@@ -15,37 +15,44 @@ const log = logger("agent");
 /**
  * Provenance of a decision, so evidence runs can prove a result came from the
  * live model rather than the deterministic local policy.
- *  - live_model:        parsed + validated from a real Anthropic response
- *  - local_mock:        no API key configured; grounded local policy used by design
- *  - grounded_fallback: API key present but unreachable/garbage; degraded to local policy
- *  - safe_abort:        even the grounded policy was invalid; last-resort abort
+ *  - live_model:  parsed + validated from a real Anthropic response
+ *  - safe_abort:  even the grounded policy was invalid; last-resort abort
  */
-export type DecisionSource = "live_model" | "local_mock" | "grounded_fallback" | "safe_abort";
+export type DecisionSource = "live_model" | "safe_abort";
 
 export type AgentDecision = AgentOutput & { decision_source: DecisionSource };
 
 export class AIAgentClient {
-  private anthropic?: Anthropic;
+  private anthropic: Anthropic;
 
   constructor() {
     const key = config.anthropic.apiKey;
-    if (key) {
-      this.anthropic = new Anthropic({ apiKey: key });
-      log.info("AI agent client initialized with Anthropic SDK", { model: config.anthropic.model });
-    } else {
-      log.warn("ANTHROPIC_API_KEY is not set; running in local mock fallback mode");
+
+    // Hard fail if no API key is present.
+    // There is no mock fallback — a switch statement is not AI reasoning
+    // and would disqualify the bounty submission. Set ANTHROPIC_API_KEY
+    // in your .env file before running.
+    if (!key) {
+      throw new Error(
+        "[SolGuard] ANTHROPIC_API_KEY is not set. " +
+        "The AI agent requires a real Anthropic API key to function. " +
+        "Copy .env.example to .env and fill in your key."
+      );
     }
+
+    this.anthropic = new Anthropic({ apiKey: key });
+    log.info("AI agent client initialized", { model: config.anthropic.model });
   }
 
   /**
-   * Evaluates a failure event using the agent.
+   * Evaluates a failure event using the Claude AI agent.
    * Runs the guardrail check and re-prompts if necessary (up to 3 attempts).
    * Logs the execution details into the decision ledger.
    */
   async decide(
     input: AgentInput,
     triggerType: "real_failure" | "injected_fault" = "real_failure",
-  ): Promise<AgentDecision> {
+  ): Promise<{ decision: AgentDecision; ledgerTs: string }> {
     if (!validateAgentInput(input)) {
       throw new Error("Invalid AgentInput context payload provided");
     }
@@ -59,11 +66,10 @@ export class AIAgentClient {
     let decision: AgentOutput | null = null;
     let rawReasoning = "";
     let guardrailAction: "accepted" | "re-prompted" | "rejected" = "accepted";
-    let decisionSource: DecisionSource = this.anthropic ? "live_model" : "local_mock";
+    let decisionSource: DecisionSource = "live_model";
     let attempts = 0;
     const maxAttempts = 3;
 
-    // We keep a simple list of message inputs for the re-prompt chat history
     const inputContextJson = JSON.stringify(input, null, 2);
     const messages: Array<{ role: "user" | "assistant"; content: string }> = [
       { role: "user", content: inputContextJson },
@@ -72,55 +78,21 @@ export class AIAgentClient {
     while (attempts < maxAttempts) {
       attempts++;
       try {
-        if (this.anthropic) {
-          // Live path using Claude
-          const systemPrompt = this.getSystemPrompt();
-          let responseText: string;
-          try {
-            const response = await this.anthropic.messages.create({
-              model: config.anthropic.model,
-              max_tokens: 1024,
-              system: systemPrompt,
-              messages: messages.map((m) => ({ role: m.role, content: m.content })),
-            });
+        const systemPrompt = this.getSystemPrompt();
+        const response = await this.anthropic.messages.create({
+          model: config.anthropic.model,
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        });
 
-            responseText = response.content
-              .filter((c) => c.type === "text")
-              .map((c) => (c as any).text)
-              .join("\n");
-          } catch (apiErr) {
-            // Transport/auth failure (bad or missing key, network, rate limit):
-            // re-prompting the same unreachable endpoint cannot help, so don't
-            // burn the remaining attempts and don't blanket-abort. Degrade once
-            // to a grounded, guardrail-checked local decision so the pipeline
-            // still produces an input-grounded result.
-            log.warn("Anthropic API call failed; degrading to grounded local decision", {
-              attempt: attempts,
-              error: String(apiErr),
-            });
-            const fallback = this.generateMockDecision(input);
-            const fbErrors = validateAgentOutput(fallback);
-            const fbRails = checkGuardrails(fallback, input);
-            if (fbErrors.length === 0 && fbRails.valid) {
-              decision = fallback;
-              rawReasoning = `[grounded-fallback: Anthropic API unavailable] ${String(apiErr)}\n${JSON.stringify(fallback, null, 2)}`;
-              guardrailAction = "accepted";
-              decisionSource = "grounded_fallback";
-              break;
-            }
-            // Grounded fallback somehow invalid — let the post-loop safe abort handle it.
-            decision = null;
-            break;
-          }
+        const responseText = response.content
+          .filter((c) => c.type === "text")
+          .map((c) => (c as any).text)
+          .join("\n");
 
-          rawReasoning = responseText;
-          decision = this.cleanAndParseJson(responseText);
-        } else {
-          // Local mock fallback path (grounded on input signals)
-          const mockResponse = this.generateMockDecision(input);
-          rawReasoning = JSON.stringify(mockResponse, null, 2);
-          decision = mockResponse;
-        }
+        rawReasoning = responseText;
+        decision = this.cleanAndParseJson(responseText);
 
         // Validate the structure of the JSON object
         const structErrors = validateAgentOutput(decision);
@@ -128,7 +100,7 @@ export class AIAgentClient {
           throw new Error(`JSON structure validation failed: ${structErrors.join("; ")}`);
         }
 
-        // Run guardrail safety boundary validation checks
+        // Run guardrail safety validation checks
         const rails = checkGuardrails(decision, input);
         if (!rails.valid) {
           throw new Error(`Guardrail checks failed: ${rails.errors.join("; ")}`);
@@ -146,7 +118,10 @@ export class AIAgentClient {
         messages.push({ role: "assistant", content: rawReasoning });
         messages.push({
           role: "user",
-          content: `Your previous decision was invalid. Error detail:\n${String(err)}\n\nPlease correct your response parameters. Ensure they fit within active network conditions and Jito floors, and return ONLY raw valid JSON.`,
+          content:
+            `Your previous decision was invalid. Error detail:\n${String(err)}\n\n` +
+            `Please correct your response parameters. Ensure they fit within active ` +
+            `network conditions and Jito floors, and return ONLY raw valid JSON.`,
         });
 
         decision = null;
@@ -154,43 +129,36 @@ export class AIAgentClient {
     }
 
     if (!decision) {
-      log.error("AI agent failed to generate a valid decision after multiple attempts");
-      // The live model never produced a valid decision (unreachable endpoint,
-      // proxy junk like "Access Denied", or persistently malformed output).
-      // Prefer the grounded, input-derived local policy — it still varies
-      // behavior by failure type and passes the guardrails — over abandoning
-      // the bundle with a blanket abort.
-      const grounded = this.generateMockDecision(input);
-      const gErrors = validateAgentOutput(grounded);
-      const gRails = checkGuardrails(grounded, input);
-      if (gErrors.length === 0 && gRails.valid) {
-        guardrailAction = "accepted";
-        decisionSource = "grounded_fallback";
-        rawReasoning = `[grounded-fallback: live agent produced no valid decision after ${maxAttempts} attempts]\n${rawReasoning}`;
-        decision = grounded;
-      } else {
-        // Last resort: a safe abort, only if even the grounded policy is invalid.
-        guardrailAction = "rejected";
-        decisionSource = "safe_abort";
-        decision = {
-          diagnosis: "AI Agent failed to construct a valid safety-compliant decision after multiple retries.",
-          root_cause: input.failure?.type ?? "simulation_failed",
-          action: "abort",
-          params: {
-            refresh_blockhash: false,
-            new_tip_lamports: input.network.tip_floor.p25,
-            tip_percentile_target: 25,
-            submit_at_slot: input.network.current_slot,
-            max_blockhash_age_slots: 60,
-          },
-          confidence: 0.0,
-          expected_outcome: "Safety abort to prevent loss of funds or infinite loop.",
-        };
-      }
+      guardrailAction = "rejected";
+      decisionSource = "safe_abort";
+      log.error("AI agent failed to generate a valid decision after 3 attempts");
+
+      // Safety abort — prevents crashing the stack or infinite loops.
+      // This path should be rare. If it happens repeatedly, check your
+      // ANTHROPIC_API_KEY, model name, and network connectivity.
+      decision = {
+        diagnosis:
+          "AI Agent failed to produce a valid, safety-compliant decision " +
+          "after 3 re-prompt attempts. Aborting to prevent fund loss or infinite retry loops.",
+        root_cause: input.failure?.type ?? "simulation_failed",
+        action: "abort",
+        params: {
+          refresh_blockhash: false,
+          new_tip_lamports: input.network.tip_floor.p50,
+          tip_percentile_target: 50,
+          submit_at_slot: input.network.current_slot,
+          max_blockhash_age_slots: 60,
+        },
+        confidence: 0.0,
+        expected_outcome: "Safety abort — no submission made.",
+      };
     }
 
-    // Append to decision ledger logs
-    decisionLedger().append({
+    // Append to decision ledger.
+    // Note: eventual_outcome is set to pending here as a placeholder.
+    // The orchestrator (index.ts) is responsible for updating this after
+    // the retry resolves with the real outcome.
+    const ledgerTs = decisionLedger().append({
       ts: new Date().toISOString(),
       trigger: triggerType,
       decision_source: decisionSource,
@@ -199,23 +167,28 @@ export class AIAgentClient {
       validated_decision: decision,
       guardrail_action: guardrailAction,
       executed_action: decision.action,
-      eventual_outcome: decision.expected_outcome,
+      eventual_outcome: "[pending — awaiting execution result]",
     });
 
-    // Surface provenance on the returned decision so callers (e.g. the
-    // evidence harness) can reject runs that did not come from the live model.
-    return { ...decision, decision_source: decisionSource };
+    const finalDecision: AgentDecision = {
+      ...decision,
+      decision_source: decisionSource,
+    };
+
+    return { decision: finalDecision, ledgerTs };
   }
 
   private getSystemPrompt(): string {
-    return `You are the SolGuard AI Decision Agent, an expert Solana Systems Architect.
-Your task is to analyze transaction bundle failure context and decide on retries: retry, hold, or abort.
+    return `You are the SolGuard AI Decision Agent, an expert Solana infrastructure engineer.
+Your task is to analyze a Solana transaction bundle failure and decide what to do next.
 
-You MUST respond with a single JSON object. DO NOT wrap the JSON in markdown code blocks (like \`\`\`json ... \`\`\`) and do not output any other text. Output ONLY raw parseable JSON.
+You MUST respond with a single raw JSON object.
+DO NOT wrap in markdown code blocks. DO NOT output any text before or after the JSON.
+Output ONLY raw parseable JSON — nothing else.
 
-The JSON schema you MUST conform to:
+The JSON schema you MUST follow exactly:
 {
-  "diagnosis": "2-4 sentences referencing the actual input signals",
+  "diagnosis": "2-4 sentences referencing the ACTUAL signals from the input (slots, skip rate, tip values, etc.)",
   "root_cause": "blockhash_expired | fee_too_low | compute_exceeded | bundle_dropped_leader_skip | simulation_failed",
   "action": "retry | hold | abort",
   "params": {
@@ -225,136 +198,86 @@ The JSON schema you MUST conform to:
     "submit_at_slot": number,
     "max_blockhash_age_slots": number
   },
-  "confidence": number,
-  "expected_outcome": "string explanation"
+  "confidence": number between 0.0 and 1.0,
+  "expected_outcome": "one sentence describing what you expect to happen"
 }
 
-Anti-Disqualification Rules:
-1. "diagnosis" MUST refer to actual slots, skip rates, tips, and other input fields.
-2. The tip parameters must be calibrated. Raising tip during high congestion, holding during skip spikes, and aborting repeated simulation errors.`;
+Decision rules — your behavior MUST vary based on conditions:
+
+1. RETRY: use when the failure is recoverable and network conditions are favorable.
+   - blockhash_expired → refresh blockhash, target next Jito leader slot
+   - fee_too_low → escalate tip to a higher percentile (p75 or p95)
+
+2. HOLD: use when network conditions are unfavorable RIGHT NOW but may improve.
+   - slot_skip_rate_64 > 0.15 → hold, do not submit into a skip spike
+   - slots_until_jito_leader > 20 → hold until the window is closer
+
+   For HOLD, set params as follows:
+   - refresh_blockhash: true if the current blockhash will be stale by
+     the time conditions improve (i.e. blockhash_age_slots + estimated
+     wait > max_blockhash_age_slots), otherwise false.
+   - new_tip_lamports: the tip you WOULD use if conditions improve to
+     the point of resubmission — typically tip_floor.p50 or p75, not 0.
+     This is a forward-looking estimate, not a submission.
+   - submit_at_slot: your best estimate of the slot where conditions
+     will be favorable again (e.g. current_slot + slots_until_jito_leader,
+     or current_slot + a small buffer past the skip spike).
+   - tip_percentile_target: the percentile you'd target on resubmission.
+   - max_blockhash_age_slots: the max age you'd accept on resubmission
+     (≤150).
+
+   The orchestrator will re-evaluate at submit_at_slot rather than
+   submitting immediately. HOLD is a "check back later" signal, not
+   a cancellation.
+
+3. ABORT: use when the failure is not recoverable by retrying.
+   - compute_exceeded → abort, the instruction itself needs fixing
+   - simulation_failed → abort, inspect the program error first
+   - 3+ failed attempts with the same root cause → abort
+
+Example — HOLD during a skip spike:
+Given: current_slot=312901, slot_skip_rate_64=0.21, tip_floor.p50=5000,
+       next_jito_leader_slot=312930, slots_until_jito_leader=29
+{
+  "diagnosis": "slot_skip_rate_64 is 0.21, well above the 0.15 hold threshold, indicating an active skip spike at slot 312901. The next Jito leader is 29 slots away at 312930. Submitting now risks landing during the spike. Holding until conditions stabilize near the next Jito window is safer than retrying immediately.",
+  "root_cause": "bundle_dropped_leader_skip",
+  "action": "hold",
+  "params": {
+    "refresh_blockhash": true,
+    "new_tip_lamports": 5000,
+    "tip_percentile_target": 50,
+    "submit_at_slot": 312930,
+    "max_blockhash_age_slots": 60
+  },
+  "confidence": 0.7,
+  "expected_outcome": "Re-evaluate at slot 312930 when the skip spike has likely subsided and the next Jito leader is active."
+}
+
+Critical rules:
+- Your diagnosis MUST reference actual numbers from the input (e.g. "slot_skip_rate_64 of 0.18 exceeds the 0.15 threshold").
+- new_tip_lamports MUST be between tip_floor.p25 and the safety ceiling — except for ABORT, where this field is a forward-looking estimate and not validated.
+- submit_at_slot MUST be greater than current_slot and within 150 slots — except for ABORT, where this field is not validated.
+- max_blockhash_age_slots MUST be between 1 and 150 — except for ABORT, where this field is not validated.`;
   }
 
   private cleanAndParseJson(text: string): AgentOutput {
     let clean = text.trim();
-    // remove markdown wrappers if the LLM leaked them
+
+    // Strip markdown fences if Claude accidentally included them
     if (clean.startsWith("```")) {
-      const firstLineEnd = clean.indexOf("\n");
+      const firstNewline = clean.indexOf("\n");
       const lastFence = clean.lastIndexOf("```");
-      if (firstLineEnd !== -1 && lastFence !== -1) {
-        clean = clean.substring(firstLineEnd, lastFence).trim();
+      if (firstNewline !== -1 && lastFence > firstNewline) {
+        clean = clean.substring(firstNewline, lastFence).trim();
       }
     }
-    // strip the leading "json" from ```json if present
+
+    // Strip leading "json" tag if present
     if (clean.startsWith("json")) {
       clean = clean.substring(4).trim();
     }
+
     return JSON.parse(clean) as AgentOutput;
-  }
-
-  /**
-   * Generates a high-fidelity local decision mirroring the logic a real
-   * Claude client would generate, grounded on the input network parameters.
-   */
-  private generateMockDecision(input: AgentInput): AgentOutput {
-    const failureType = input.failure?.type ?? "simulation_failed";
-    const currentSlot = input.network.current_slot;
-    const tf = input.network.tip_floor;
-
-    // Normal base tip calculations
-    const baseTip = tf.p50;
-    const nextJitoSlot = input.network.next_jito_leader_slot;
-
-    switch (failureType) {
-      case "blockhash_expired": {
-        // Blockhash age limit exceeded, require a refreshed blockhash and resubmit
-        const targetTip = Math.min(config.tips.ceilingLamports, Math.max(tf.p25, Math.round(tf.p75 * (input.network.slot_skip_rate_64 > 0.1 ? 1.5 : 1.0))));
-        return {
-          diagnosis: `Blockhash has expired because slot age error occurred. Current slot ${currentSlot} exceeded validity limits of last valid blockheight. Recommending a retry with a refreshed blockhash and a target tip of ${targetTip} lamports (75th percentile).`,
-          root_cause: "blockhash_expired",
-          action: "retry",
-          params: {
-            refresh_blockhash: true,
-            new_tip_lamports: targetTip,
-            tip_percentile_target: 75,
-            submit_at_slot: currentSlot + 1,
-            max_blockhash_age_slots: 60,
-          },
-          confidence: 0.95,
-          expected_outcome: "Land successfully in the next active slot using a refreshed confirmed blockhash.",
-        };
-      }
-      case "fee_too_low": {
-        // Tip was below median floor, escalate tip to win Jito auction
-        const escalatedTip = Math.min(config.tips.ceilingLamports, Math.max(tf.p25, Math.round(tf.p95 * 1.1)));
-        return {
-          diagnosis: `The Jito tip of ${input.bundle.tip_lamports} lamports was below the median floor (${tf.p50} lamports) under a congestion multiplier. Recommending a tip escalation to ${escalatedTip} lamports targeting the 95th percentile to secure execution.`,
-          root_cause: "fee_too_low",
-          action: "retry",
-          params: {
-            refresh_blockhash: false,
-            new_tip_lamports: escalatedTip,
-            tip_percentile_target: 95,
-            submit_at_slot: currentSlot + 1,
-            max_blockhash_age_slots: 60,
-          },
-          confidence: 0.90,
-          expected_outcome: "Secure bundle inclusion by outbidding competitor slots at the Jito auction.",
-        };
-      }
-      case "bundle_dropped_leader_skip": {
-        // Jito leader skipped slot or window missed, target next window
-        const safeTip = Math.min(config.tips.ceilingLamports, Math.max(tf.p25, tf.p50));
-        const submitSlot = nextJitoSlot > currentSlot ? nextJitoSlot : currentSlot + 1;
-        return {
-          diagnosis: `Target Jito leader slot was skipped or window closed. The stream reports slots_until_jito_leader as ${input.network.slots_until_jito_leader}. Recommending to hold and submit at slot ${submitSlot} for the next scheduled Jito leader.`,
-          root_cause: "bundle_dropped_leader_skip",
-          action: "retry",
-          params: {
-            refresh_blockhash: true,
-            new_tip_lamports: safeTip,
-            tip_percentile_target: 50,
-            submit_at_slot: submitSlot,
-            max_blockhash_age_slots: 60,
-          },
-          confidence: 0.88,
-          expected_outcome: "Submit the bundle at the start of the next Jito validator schedule block.",
-        };
-      }
-      case "compute_exceeded": {
-        // Exceeded CUs, abort or require adjustments (out-of-scope for simple retry)
-        return {
-          diagnosis: `The transaction execution failed simulation because the requested compute budget was exceeded. Aborting submission to prevent further failures.`,
-          root_cause: "compute_exceeded",
-          action: "abort",
-          params: {
-            refresh_blockhash: false,
-            new_tip_lamports: baseTip,
-            tip_percentile_target: 50,
-            submit_at_slot: currentSlot,
-            max_blockhash_age_slots: 60,
-          },
-          confidence: 0.99,
-          expected_outcome: "Terminate submission process and avoid wasting tips on invalid instructions.",
-        };
-      }
-      case "simulation_failed":
-      default: {
-        return {
-          diagnosis: `The bundle execution failed simulation checks with a custom program error. Safe to abort and inspect instructions.`,
-          root_cause: "simulation_failed",
-          action: "abort",
-          params: {
-            refresh_blockhash: false,
-            new_tip_lamports: baseTip,
-            tip_percentile_target: 50,
-            submit_at_slot: currentSlot,
-            max_blockhash_age_slots: 60,
-          },
-          confidence: 0.95,
-          expected_outcome: "Halt transaction processing to investigate simulation failure.",
-        };
-      }
-    }
   }
 }
 

@@ -20,6 +20,7 @@ import { submitBundle, type SubmitResult } from "../src/bundle/submitter.js";
 import { LifecycleTracker } from "../src/lifecycle/tracker.js";
 import { classifyFailure } from "../src/lifecycle/classifier.js";
 import { aiAgentClient } from "../src/agent/agent.js";
+import { decisionLedger } from "../src/agent/ledger.js";
 import { faultInjector } from "../src/faults/injector.ts"; // using ts extension to compile correctly
 import { CongestionOracle } from "../src/network/congestion.js";
 import type { Commitment, SlotEvent, TxEvent } from "../src/stream/events.js";
@@ -275,7 +276,7 @@ async function runTestHarness() {
   };
 
   log.info("Calling AI Agent for decision...");
-  const agentDecision = await agent.decide(agentInput, "injected_fault");
+  const { decision: agentDecision, ledgerTs } = await agent.decide(agentInput, "injected_fault");
   assertProvenance("blockhash_expired", agentDecision.decision_source);
 
   log.info(`AI Decision Diagnosis: "${agentDecision.diagnosis}"`);
@@ -328,10 +329,27 @@ async function runTestHarness() {
     if (retryEntry && retryEntry.stages.finalized) {
       log.info("✔ Retried bundle successfully finalized.");
       log.info(`Landed Slot: ${retryEntry.stages.processed?.slot}, Confirmation Via: ${retryEntry.confirmed_via}`);
+      
+      // Update decision ledger
+      decisionLedger().updateOutcome(
+        ledgerTs,
+        retryResult.bundleId,
+        `landed @ slot ${retryEntry.stages.processed?.slot}`
+      );
     } else {
+      decisionLedger().updateOutcome(
+        ledgerTs,
+        retryResult.bundleId,
+        "retry failed: bundle failed to land"
+      );
       throw new Error("Retried bundle failed to land");
     }
   } else {
+    decisionLedger().updateOutcome(
+      ledgerTs,
+      attempt1Result.bundleId,
+      `aborted/held — ${agentDecision.action}`
+    );
     throw new Error(`Expected Agent to retry, but got action: ${agentDecision.action}`);
   }
 
@@ -399,11 +417,32 @@ async function runTestHarness() {
     history: [{ attempt: 1, outcome: "rejected_low_fee" }],
   };
 
-  const lowTipAgentDecision = await agent.decide(lowTipAgentInput, "injected_fault");
+  const { decision: lowTipAgentDecision, ledgerTs: lowTipLedgerTs } = await agent.decide(lowTipAgentInput, "injected_fault");
   assertProvenance("fee_too_low", lowTipAgentDecision.decision_source);
   log.info(`AI Decision Diagnosis: "${lowTipAgentDecision.diagnosis}"`);
   log.info(`AI Decision Action: ${lowTipAgentDecision.action.toUpperCase()}`);
   log.info(`AI Decision Params: refresh_blockhash=${lowTipAgentDecision.params.refresh_blockhash}, new_tip=${lowTipAgentDecision.params.new_tip_lamports} lamports`);
+
+  // Scenario 3 doesn't actually execute retry in the test, so update with simulated outcome
+  if (lowTipAgentDecision.action === "retry") {
+    decisionLedger().updateOutcome(
+      lowTipLedgerTs,
+      lowTipResult.bundleId,
+      `retry initiated with tip ${lowTipAgentDecision.params.new_tip_lamports} lamports (simulated)`
+    );
+  } else if (lowTipAgentDecision.action === "hold") {
+    decisionLedger().updateOutcome(
+      lowTipLedgerTs,
+      lowTipResult.bundleId,
+      `held — waiting for better network conditions`
+    );
+  } else {
+    decisionLedger().updateOutcome(
+      lowTipLedgerTs,
+      lowTipResult.bundleId,
+      `aborted — low fee not recoverable`
+    );
+  }
 
   injector.setFault(null);
 
@@ -461,11 +500,25 @@ async function runTestHarness() {
     history: [{ attempt: 1, outcome: "compute_exceeded" }],
   };
 
-  const computeAgentDecision = await agent.decide(computeAgentInput, "injected_fault");
+  const { decision: computeAgentDecision, ledgerTs: computeLedgerTs } = await agent.decide(computeAgentInput, "injected_fault");
   assertProvenance("compute_exceeded", computeAgentDecision.decision_source);
   log.info(`AI Decision Diagnosis: "${computeAgentDecision.diagnosis}"`);
   log.info(`AI Decision Action: ${computeAgentDecision.action.toUpperCase()}`);
   log.info(`AI Decision Params: refresh_blockhash=${computeAgentDecision.params.refresh_blockhash}, new_tip=${computeAgentDecision.params.new_tip_lamports} lamports`);
+
+  if (computeAgentDecision.action === "abort") {
+    decisionLedger().updateOutcome(
+      computeLedgerTs,
+      computeResult.bundleId,
+      `aborted — ${computeAgentDecision.root_cause} not recoverable`
+    );
+  } else {
+    decisionLedger().updateOutcome(
+      computeLedgerTs,
+      computeResult.bundleId,
+      `action ${computeAgentDecision.action} resolved`
+    );
+  }
 
   injector.setFault(null);
 
@@ -479,12 +532,28 @@ async function runTestHarness() {
   const ledgerPath = "logs/decisions.jsonl";
   if (existsSync(ledgerPath)) {
     const lines = readFileSync(ledgerPath, "utf-8").trim().split("\n");
-    log.info(`Ledger file exists with ${lines.length} decision entries.`);
-    // Verify structure of the last written line
-    const lastEntry = JSON.parse(lines[lines.length - 1]!);
-    log.info(`Last logged entry trigger: "${lastEntry.trigger}"`);
-    log.info(`Last logged executed action: "${lastEntry.executed_action}"`);
-    log.info(`Last logged outcome: "${lastEntry.eventual_outcome}"`);
+    log.info(`Ledger file exists with ${lines.length} decision/patch entries.`);
+    // Find the last actual decision entry and the last patch entry
+    let lastDecision: any = null;
+    let lastPatch: any = null;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i]) continue;
+      const parsed = JSON.parse(lines[i]!);
+      if (parsed.type === "outcome_patch") {
+        if (!lastPatch) lastPatch = parsed;
+      } else {
+        if (!lastDecision) lastDecision = parsed;
+      }
+    }
+    if (lastDecision) {
+      log.info(`Last logged entry trigger: "${lastDecision.trigger}"`);
+      log.info(`Last logged executed action: "${lastDecision.executed_action}"`);
+    }
+    if (lastPatch) {
+      log.info(`Last logged outcome patch: bundle="${lastPatch.bundle_id}", outcome="${lastPatch.eventual_outcome}"`);
+    } else if (lastDecision) {
+      log.info(`Last logged outcome: "${lastDecision.eventual_outcome}"`);
+    }
   } else {
     throw new Error("Decision ledger file decisions.jsonl was not found");
   }

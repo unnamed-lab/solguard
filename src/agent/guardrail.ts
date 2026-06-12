@@ -7,11 +7,45 @@ export interface GuardrailResult {
 }
 
 /**
- * Validates the AI agent decision against strict network safety boundaries (PRD §8, AGENT.md §5).
- * It returns an object containing a boolean flag and a list of specific error messages if any boundaries are violated.
+ * Validates the AI agent decision against strict network safety boundaries
+ * (PRD §8, AGENT.md §5).
+ *
+ * For "retry" and "hold" actions, all submission-related parameters
+ * (tip, slot, blockhash age) are validated — these will be used to
+ * actually submit or schedule a bundle.
+ *
+ * For "abort" actions, submission-related parameters are NOT validated.
+ * Nothing is being submitted, so a tip of 0 or a stale submit_at_slot
+ * is semantically correct and should not trigger a re-prompt. Forcing
+ * Claude to fill these with "valid-looking" numbers it doesn't need
+ * would itself be a form of dressed-up hardcoding.
+ *
+ * action and confidence are always validated, regardless of action type.
  */
 export function checkGuardrails(output: AgentOutput, input: AgentInput): GuardrailResult {
   const errors: string[] = [];
+
+  // --- Always validated, regardless of action ---
+
+  if (!["retry", "hold", "abort"].includes(output.action)) {
+    errors.push(`action must be retry, hold, or abort. Got "${output.action}"`);
+  }
+
+  if (output.confidence < 0 || output.confidence > 1) {
+    errors.push(`confidence must be between 0 and 1. Got ${output.confidence}`);
+  }
+
+  // --- Submission-related checks: skip entirely for "abort" ---
+
+  if (output.action === "abort") {
+    return {
+      valid: errors.length === 0,
+      errors,
+    };
+  }
+
+  // From here on, action is "retry" or "hold" — these parameters
+  // will actually be used to submit or schedule a bundle.
 
   // 1. Tip bounds: must be in [tip_floor.p25, TIP_CEILING_LAMPORTS]
   const p25 = input.network.tip_floor.p25;
@@ -44,15 +78,6 @@ export function checkGuardrails(output: AgentOutput, input: AgentInput): Guardra
   }
   if (maxAge <= 0) {
     errors.push(`max_blockhash_age_slots (${maxAge}) must be positive`);
-  }
-
-  // 4. action and confidence validation (already covered by contract, but reinforce)
-  if (!["retry", "hold", "abort"].includes(output.action)) {
-    errors.push(`action must be retry, hold, or abort. Got "${output.action}"`);
-  }
-
-  if (output.confidence < 0 || output.confidence > 1) {
-    errors.push(`confidence must be between 0 and 1. Got ${output.confidence}`);
   }
 
   return {
