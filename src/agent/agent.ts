@@ -81,7 +81,10 @@ export class AIAgentClient {
         const systemPrompt = this.getSystemPrompt();
         const response = await this.anthropic.messages.create({
           model: config.anthropic.model,
-          max_tokens: 1024,
+          // 2048 leaves headroom for a full diagnosis + params object; at 1024
+          // Opus occasionally hit the cap and returned truncated JSON, forcing
+          // an unnecessary re-prompt every call.
+          max_tokens: 2048,
           system: systemPrompt,
           messages: messages.map((m) => ({ role: m.role, content: m.content })),
         });
@@ -92,6 +95,16 @@ export class AIAgentClient {
           .join("\n");
 
         rawReasoning = responseText;
+
+        // If the model hit the token cap, the JSON is truncated. Surface this
+        // explicitly so the re-prompt is intentional, rather than feeding
+        // partial text into JSON.parse and getting "Unexpected end of JSON input".
+        if (response.stop_reason === "max_tokens") {
+          throw new Error(
+            "Response truncated at max_tokens before the JSON was complete; re-prompting for a shorter, complete decision.",
+          );
+        }
+
         decision = this.cleanAndParseJson(responseText);
 
         // Validate the structure of the JSON object
