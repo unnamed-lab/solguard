@@ -9,7 +9,7 @@ import { config } from "../config.js";
 import { logger } from "../util/log.js";
 import { BoundedQueue } from "./queue.js";
 import { SlotState } from "./state.js";
-import { slotSubscribeRequest, txSubscribeRequest, pingRequest } from "./filters.js";
+import { combinedSubscribeRequest, pingRequest } from "./filters.js";
 import type { Commitment, SlotEvent, StreamEvent, StreamMetrics, TxEvent } from "./events.js";
 
 const log = logger("stream");
@@ -145,10 +145,10 @@ export class StreamManager {
   private async resubscribe(): Promise<void> {
     if (!this.stream) return;
     const from = this.state.lastProcessedSlot > 0n ? this.state.lastProcessedSlot : undefined;
-    await writeReq(this.stream, slotSubscribeRequest(from));
-    if (this.trackedAccounts.length > 0) {
-      await writeReq(this.stream, txSubscribeRequest(this.trackedAccounts));
-    }
+    // One combined request: a second SubscribeRequest replaces (not merges)
+    // the subscription, so slots + txns must go in a single write or the tx
+    // request would clobber the slot subscription and freeze slot updates.
+    await writeReq(this.stream, combinedSubscribeRequest(from, this.trackedAccounts));
   }
 
   private wireStream(stream: ClientDuplexStream<SubscribeRequest, SubscribeUpdate>): void {
