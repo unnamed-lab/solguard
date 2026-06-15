@@ -6,11 +6,11 @@
  * Run: pnpm tsx src/bundle/dry-run.ts
  */
 import { SystemProgram } from "@solana/web3.js";
-import { connection, wallet } from "../solana/connection.js";
+import { wallet } from "../solana/connection.js";
 import { jitoClient } from "../jito/client.js";
 import { tipFloorService } from "../tips/tipFloor.js";
 import { computeTip, selectPercentile } from "../tips/model.js";
-import { buildBundle } from "./builder.js";
+import { buildBundle, fetchConfirmedBlockhash } from "./builder.js";
 import { logger } from "../util/log.js";
 
 const log = logger("dry-run");
@@ -33,11 +33,14 @@ async function main() {
   const chosenTip = tipAccounts[Math.floor(Math.random() * tipAccounts.length)];
   log.info("tip accounts", { count: tipAccounts.length, chosen: chosenTip });
 
-  // 4. fetch confirmed blockhash
-  const conn = connection();
-  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
-  const currentSlot = await conn.getSlot("confirmed");
-  log.info("blockhash fetched", { blockhash, lastValidBlockHeight, slot: currentSlot });
+  // 4. fetch confirmed blockhash (FR-12) — reused for the bundle below so all
+  //    txs share ONE blockhash (FR-11) instead of the builder fetching its own.
+  const bh = await fetchConfirmedBlockhash();
+  log.info("blockhash fetched", {
+    blockhash: bh.blockhash,
+    lastValidBlockHeight: bh.lastValidBlockHeight,
+    slot: bh.fetchedAtSlot,
+  });
 
   // 5. build a dummy bundle: simple SOL transfer to self (no-op bundle)
   const payer = wallet();
@@ -51,6 +54,7 @@ async function main() {
     transactions: [[dummyIx]],
     tipLamports: tip.lamports,
     tipAccount: chosenTip,
+    blockhash: bh,
   });
 
   log.info("bundle built successfully", {

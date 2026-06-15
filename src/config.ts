@@ -63,7 +63,7 @@ export const config = {
   },
 
   anthropic: {
-    apiKey: opt("ANTHROPIC_API_KEY", ""), // optional until Phase 4
+    apiKey: opt("ANTHROPIC_API_KEY", ""), // required for the AI decision agent
     model: opt("ANTHROPIC_MODEL", "claude-opus-4-8"),
   },
 

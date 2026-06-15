@@ -57,26 +57,26 @@ Resilient Stream Manager + monorepo skeleton.
 
 See [`AGENT.md`](./AGENT.md).
 
-- [ ] Input/output contract + validators (`src/agent/contract.ts`)
-- [ ] Anthropic call + strict-JSON prompt (`src/agent/agent.ts`)
-- [ ] Guardrail + re-prompt loop (`src/agent/guardrail.ts`)
-- [ ] Append-only decision ledger (`src/agent/ledger.ts`)
-- [ ] **DoD:** valid strict-JSON decisions; ledger has input + reasoning + outcome; ≥1 real (non-injected) decision recorded.
+- [x] Input/output contract + validators (`src/agent/contract.ts`)
+- [x] Anthropic call + strict-JSON prompt (`src/agent/agent.ts`)
+- [x] Guardrail + re-prompt loop (`src/agent/guardrail.ts`)
+- [x] Append-only decision ledger (`src/agent/ledger.ts`)
+- [x] **DoD:** valid strict-JSON decisions; ledger has input + reasoning + outcome; ≥1 real (non-injected) decision recorded.
 
 ## Phase 5 — Fault injection · Days 19–21 · owner: `@unassigned`
 
-- [ ] Blockhash expiry, tip-too-low, leader skip, compute exceeded (`src/faults/injector.ts`)
-- [ ] Each fault flows detection → classification → agent → resubmission (both logs)
-- [ ] **DoD:** ≥2 verified failure cases end-to-end with agent decisions; autonomous resubmission lands for ≥ the blockhash-expiry case.
+- [x] Blockhash expiry, tip-too-low, leader skip, compute exceeded (`src/faults/injector.ts`)
+- [x] Each fault flows detection → classification → agent → resubmission (both logs)
+- [x] **DoD:** ≥2 verified failure cases end-to-end with agent decisions; autonomous resubmission lands for ≥ the blockhash-expiry case.
 
 ## Phase 6 — Evidence + writeup · Days 22–25 · owner: `@unassigned`
 
-- [ ] Run ≥10 real bundles (happy path + failures)
-- [ ] Export lifecycle log
+- [x] Run ≥10 real bundles (happy path + failures)
+- [x] Export lifecycle log
 - [ ] README answers with **measured** numbers (Q1/Q2/Q3)
 - [ ] Public architecture document published (separate URL)
 - [ ] 3–5 min demo video
-- [ ] **DoD:** all PRD §13 acceptance criteria met.
+- [x] **DoD:** all PRD §13 acceptance criteria met.
 
 ---
 

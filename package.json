@@ -11,13 +11,16 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "live": "tsx src/live.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "stream": "tsx src/stream/probe.ts",
     "bundle:dry": "tsx src/bundle/dry-run.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint:tips": "node scripts/check-no-hardcoded-tips.mjs"
+    "lint:tips": "node scripts/check-no-hardcoded-tips.mjs",
+    "fault:test": "tsx scripts/fault-test.ts",
+    "fault:test:evidence": "tsx scripts/fault-test.ts --evidence"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

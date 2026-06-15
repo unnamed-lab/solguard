@@ -65,6 +65,34 @@ export function txSubscribeRequest(accountIncludes: string[]): SubscribeRequest 
   };
 }
 
+/**
+ * Combined slot + (optional) transaction subscription in ONE request.
+ *
+ * A Yellowstone `SubscribeRequest` REPLACES the entire subscription state —
+ * it is not merged with prior writes. Sending the slot request and then the
+ * tx request as two separate writes makes the second (with `slots: {}`) clobber
+ * the slot subscription, freezing slot updates. Always subscribe to everything
+ * we want in a single request.
+ */
+export function combinedSubscribeRequest(
+  fromSlot?: bigint,
+  accountIncludes: string[] = [],
+): SubscribeRequest {
+  const req = slotSubscribeRequest(fromSlot);
+  if (accountIncludes.length > 0) {
+    req.transactions = {
+      mine: {
+        vote: false,
+        failed: false,
+        accountInclude: accountIncludes,
+        accountExclude: [],
+        accountRequired: [],
+      },
+    };
+  }
+  return req;
+}
+
 /** A bare ping request used to reply to server keepalives (FR-4). */
 export function pingRequest(): SubscribeRequest {
   return {
