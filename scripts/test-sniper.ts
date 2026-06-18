@@ -304,17 +304,22 @@ async function main() {
   // Slot window analysis
   // ─────────────────────────────────────────────────────────────────────────────
   console.log(`\n  ${c("dim", "─── Slot Window Analysis ──────────────────────────────────────────")}`);
-  const delta = result.slotDelta ?? 0;
-  if (delta === 0) {
-    console.log(`  ${c("green", "✔")} ${c("bold" as any, "Same-slot submission")} — best possible outcome`);
-    console.log(`  ${c("dim", "    Bundle landed in the same slot window as pool detection.")}`);
-  } else if (delta <= 2) {
-    console.log(`  ${c("green", "✔")} ${c("bold" as any, `+${delta} slot${delta > 1 ? "s" : ""} submission")} — excellent`);
-    console.log(`  ${c("dim", `    ${delta * 400} ms elapsed between detection and submission.`)}`);
-  } else if (delta <= 5) {
-    console.log(`  ${c("yellow", "⚠")} ${c("bold" as any, `+${delta} slots`)} — acceptable but competitive buyers may have gone first`);
+  if (result.error !== null && result.slotDelta === null) {
+    warn(`Pipeline incomplete — ${result.error}`);
+    info("In production: fallback to next Jito leader window");
   } else {
-    console.log(`  ${c("red", "✘")} ${c("bold" as any, `+${delta} slots`)} — slow; Jupiter API latency or RPC congestion likely`);
+    const delta = result.slotDelta ?? 0;
+    if (delta === 0) {
+      console.log(`  ${c("green", "✔")} ${c("bold" as any, "Same-slot submission")} — best possible outcome`);
+      console.log(`  ${c("dim", "    Bundle landed in the same slot window as pool detection.")}`);
+    } else if (delta <= 2) {
+      console.log(`  ${c("green", "✔")} ${c("bold" as any, `+${delta} slot${delta > 1 ? "s" : ""} submission`)} — excellent`);
+      console.log(`  ${c("dim", `    ${delta * 400} ms elapsed between detection and submission.`)}`);
+    } else if (delta <= 5) {
+      console.log(`  ${c("yellow", "⚠")} ${c("bold" as any, `+${delta} slots`)} — acceptable but competitive buyers may have gone first`);
+    } else {
+      console.log(`  ${c("red", "✘")} ${c("bold" as any, `+${delta} slots`)} — slow; Jupiter API latency or RPC congestion likely`);
+    }
   }
 
   console.log(`\n  ${c("dim", "Jito tip used: ")}${sniperTip.lamports.toLocaleString()} lmp (${sniperTip.percentileKey}) — competitive at launch`);
