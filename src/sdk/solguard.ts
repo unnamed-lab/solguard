@@ -11,6 +11,7 @@ import {
 import bs58 from "bs58";
 
 import { config } from "../config.js";
+import { bridge } from "../events/bridge.js";
 import { StreamManager } from "../stream/manager.js";
 import { CongestionOracle, type CongestionSnapshot } from "../network/congestion.js";
 import { LeaderWindowDetector, type LeaderWindow } from "../network/leader.js";
@@ -115,11 +116,45 @@ export class SolGuard {
 
     // Drain the stream so the oracle/lifecycle stay live.
     this.streamReaderPromise = (async () => {
+      let lastTelemetryEmit = 0;
+      let lastLeaderPoll = 0;
+      let cachedLeaderSlot: number | null = null;
+      let lastTipFetchedAt = 0;
+
       try {
         for await (const ev of this.stream!.queue) {
           if (ev.kind === "slot") {
             this.oracle!.ingest(ev);
             this.lifecycle!.onSlotStatus(Number(ev.slot), ev.status, ev.ts);
+
+            const now = Date.now();
+
+            // Refresh leader window every 5 s (fire-and-forget)
+            if (now - lastLeaderPoll > 5_000) {
+              lastLeaderPoll = now;
+              this.leader!.window()
+                .then((w) => { cachedLeaderSlot = w.nextJitoLeaderSlot ?? null; })
+                .catch(() => {});
+            }
+
+            // Emit telemetry at ~400 ms cadence to match frontend polling
+            if (now - lastTelemetryEmit > 400) {
+              lastTelemetryEmit = now;
+              const snap = this.oracle!.snapshot();
+
+              // Include tip floor only when it has changed since last emission
+              const tf = this.tipFloor.getCached();
+              const tipFloor = tf && tf.fetchedAt !== lastTipFetchedAt ? tf : undefined;
+              if (tipFloor) lastTipFetchedAt = tipFloor.fetchedAt;
+
+              bridge.emit("telemetry", {
+                slot: Number(ev.slot),
+                skipRate: snap.skipRate * 100, // fraction → percentage for the frontend
+                pcDelta: snap.p2cMsP50,
+                jitoLeaderSlot: cachedLeaderSlot,
+                tipFloor,
+              });
+            }
           } else {
             this.lifecycle!.onTxEvent(ev, "processed");
           }
@@ -287,6 +322,12 @@ export class SolGuard {
     // Submit bundle
     const result = await submitBundle(built);
     this.lifecycle!.track(result, ctx.attempt, currentSlot);
+
+    // If Jito marks the bundle Invalid early (no auth token / deprioritised),
+    // fall back to a direct sendTransaction so the tx still lands via normal TPU.
+    this.jitoInvalidFallback(result.bundleId, built).catch((err) =>
+      log.debug("jito-invalid RPC fallback error", { err: String(err) })
+    );
 
     // Wait for confirmation on Yellowstone stream
     const landed = await this.awaitConfirmation(result.bundleId);
@@ -524,6 +565,42 @@ export class SolGuard {
       lastValidBlockHeight: bh.lastValidBlockHeight,
       fetchedAtSlot: bh.fetchedAtSlot,
     };
+  }
+
+  /**
+   * Polls Jito's inflight status for 8 s. If the bundle is already "Invalid"
+   * (block engine rejected it — usually lack of auth token), we fall back to a
+   * direct sendTransaction via our RPC so the transaction still lands via the
+   * normal TPU path. The Yellowstone stream will confirm it once it processes.
+   */
+  private async jitoInvalidFallback(bundleId: string, built: BuiltBundle): Promise<void> {
+    const POLL_INTERVAL_MS = 2_000;
+    const GIVE_UP_MS = 8_000;
+    const deadline = Date.now() + GIVE_UP_MS;
+
+    while (Date.now() < deadline) {
+      await this.sleep(POLL_INTERVAL_MS);
+      try {
+        const statuses = await this.jito.getInflightBundleStatuses([bundleId]);
+        const s = statuses.find((x) => x.bundle_id === bundleId);
+        if (s?.status === "Invalid") {
+          log.warn("bundle marked Invalid by Jito; submitting via RPC fallback", { bundleId });
+          for (const encodedTx of built.encodedTxs) {
+            const buf = Buffer.from(encodedTx, "base64");
+            const tx = VersionedTransaction.deserialize(buf);
+            await this.sdkConnection.sendRawTransaction(tx.serialize(), {
+              skipPreflight: false,
+              maxRetries: 3,
+            }).then((sig) => log.info("RPC fallback tx sent", { sig }))
+              .catch((err) => log.debug("RPC fallback tx send error", { err: String(err) }));
+          }
+          return;
+        }
+        if (s?.status === "Landed" || s?.status === "Pending") return;
+      } catch (err) {
+        log.debug("inflight status check failed in fallback", { err: String(err) });
+      }
+    }
   }
 
   private async pickTipAccount(): Promise<string> {

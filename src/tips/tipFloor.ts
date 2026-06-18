@@ -46,6 +46,11 @@ export class TipFloorService {
     private readonly ttlMs = 60_000,
   ) {}
 
+  /** Return the in-memory cache without triggering a network fetch (may be undefined). */
+  getCached(): TipFloor | undefined {
+    return this.cache;
+  }
+
   /** Cached tip floor; refetches when stale. */
   async get(): Promise<TipFloor> {
     const now = Date.now();

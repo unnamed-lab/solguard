@@ -1,5 +1,6 @@
 import { JsonlWriter } from "../util/jsonl.js";
 import { logger } from "../util/log.js";
+import { bridge } from "../events/bridge.js";
 import type { AgentInput, AgentOutput } from "./contract.js";
 
 const log = logger("ledger");
@@ -56,6 +57,31 @@ export class DecisionLedger {
         action: entry.executed_action,
         rootCause: entry.validated_decision?.root_cause ?? "unknown",
         placeholderOutcome: entry.eventual_outcome,
+      });
+
+      bridge.emit("decision_event", {
+        triggeredAt: entry.ts,
+        trigger: entry.trigger,
+        decision_source: entry.decision_source,
+        input_context: entry.input_context,
+        rawReasoning: entry.raw_reasoning,
+        diagnosis: entry.validated_decision?.diagnosis,
+        rootCause: entry.validated_decision?.root_cause,
+        action: entry.executed_action,
+        params: entry.validated_decision?.params
+          ? {
+              refreshBlockhash: entry.validated_decision.params.refresh_blockhash,
+              newTipLamports: entry.validated_decision.params.new_tip_lamports,
+              tipPercentileTarget: entry.validated_decision.params.tip_percentile_target,
+              submitAtSlot: entry.validated_decision.params.submit_at_slot,
+              maxBlockhashAgeSlots: entry.validated_decision.params.max_blockhash_age_slots,
+            }
+          : undefined,
+        confidence: entry.validated_decision?.confidence,
+        expected_outcome: entry.validated_decision?.expected_outcome,
+        guardrail_action: entry.guardrail_action,
+        executed_action: entry.executed_action,
+        eventual_outcome: entry.eventual_outcome,
       });
     } catch (err) {
       log.error("failed to write to decision ledger", { err: String(err) });

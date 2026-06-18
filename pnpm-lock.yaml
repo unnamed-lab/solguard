@@ -29,10 +29,16 @@ importers:
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)
     devDependencies:
       '@types/node':
         specifier: ^20.14.0
         version: 20.19.41
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       tsx:
         specifier: ^4.19.1
         version: 4.22.4

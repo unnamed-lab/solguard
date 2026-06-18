@@ -1,5 +1,6 @@
 import { logger } from "../util/log.js";
 import { JsonlWriter } from "../util/jsonl.js";
+import { bridge } from "../events/bridge.js";
 import type { SlotEvent, TxEvent, Commitment } from "../stream/events.js";
 import type { SubmitResult } from "../bundle/submitter.js";
 import type {
@@ -76,6 +77,17 @@ export class LifecycleTracker {
     this.bundles.set(sub.bundleId, tracked);
     for (const sig of sub.signatures) this.sigIndex.set(sig, sub.bundleId);
     log.info("tracking bundle", { bundleId: sub.bundleId, attempt, submittedSlot });
+
+    bridge.emit("bundle_event", {
+      bundleId: sub.bundleId,
+      stage: "submitted",
+      slot: submittedSlot,
+      timestamp: ts,
+      signatures: sub.signatures,
+      tipLamports: sub.tipLamports,
+      tipAccount: sub.tipAccount,
+      attempt,
+    });
   }
 
   /**
@@ -132,6 +144,15 @@ export class LifecycleTracker {
     tracked.entry.failure = failure;
     this.finish(tracked);
     log.warn("bundle failed", { bundleId, type: failure.type });
+
+    bridge.emit("bundle_event", {
+      bundleId,
+      stage: "failed",
+      slot: failure.detectedAtSlot,
+      timestamp: failure.ts,
+      failureType: failure.type,
+      evidence: failure.evidence as Record<string, unknown>,
+    });
   }
 
   private advance(
@@ -155,6 +176,19 @@ export class LifecycleTracker {
     this.recomputeDeltas(tracked);
 
     log.debug("stage advanced", { bundleId: tracked.entry.bundle_id, stage, slot, via });
+
+    bridge.emit("bundle_event", {
+      bundleId: tracked.entry.bundle_id,
+      stage: stage as "processed" | "confirmed" | "finalized",
+      slot,
+      timestamp: new Date(tsMs).toISOString(),
+      deltaMs: (() => {
+        if (stage === "processed") return tracked.entry.deltas_ms.submitted_to_processed;
+        if (stage === "confirmed") return tracked.entry.deltas_ms.processed_to_confirmed;
+        if (stage === "finalized") return tracked.entry.deltas_ms.confirmed_to_finalized;
+        return undefined;
+      })(),
+    });
 
     if (stage === "finalized") this.finish(tracked);
   }
