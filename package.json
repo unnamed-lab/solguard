@@ -24,6 +24,7 @@
     "test:submit": "tsx scripts/test-submit.ts",
     "test:submit:swap": "tsx scripts/test-submit.ts -- --swap",
     "test:agent": "tsx scripts/test-agent-mainnet.ts",
+    "test:trading": "tsx scripts/test-trading-scenarios.ts",
     "server": "tsx src/server.ts",
     "server:watch": "tsx watch src/server.ts"
   },
