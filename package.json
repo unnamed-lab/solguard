@@ -23,6 +23,7 @@
     "fault:test:evidence": "tsx scripts/fault-test.ts --evidence",
     "test:submit": "tsx scripts/test-submit.ts",
     "test:submit:swap": "tsx scripts/test-submit.ts -- --swap",
+    "test:agent": "tsx scripts/test-agent-mainnet.ts",
     "server": "tsx src/server.ts",
     "server:watch": "tsx watch src/server.ts"
   },
