@@ -31,6 +31,11 @@ SolGuard ships as two things at once:
 
 ## Architecture (overview)
 
+![SolGuard system architecture](./docs/images/solguard_docs_architecture.png)
+
+<details>
+<summary>ASCII diagram</summary>
+
 ```
 Yellowstone gRPC ─▶ Stream Manager ─▶ ┬─▶ Congestion Oracle ─┐
  (reconnect/replay/dedupe/backpressure)├─▶ Leader Detector    ├─▶ AI Agent ─▶ Bundle Builder ─▶ Jito Block Engine
@@ -40,10 +45,12 @@ Yellowstone gRPC ─▶ Stream Manager ─▶ ┬─▶ Congestion Oracle ─┐
                                                                         │
                                           SolGuard SDK / HTTP API (src/sdk, src/server.ts)
 ```
+</details>
 
-Full detail: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+Full detail + interactive diagrams: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ---
+
 
 ## Developer integration
 

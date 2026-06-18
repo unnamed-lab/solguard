@@ -6,13 +6,34 @@
 
 ## 0. Diagrams
 
-Open in [Excalidraw](https://excalidraw.com) (File → Open) or any VS Code Excalidraw extension.
+> Source files in `docs/*.excalidraw` — open with [Excalidraw](https://excalidraw.com) (File → Open) or the VS Code Excalidraw extension to edit.
 
-| Diagram | File | What it shows |
-|---|---|---|
-| System Architecture | [`docs/architecture.excalidraw`](./docs/architecture.excalidraw) | Full component graph — Yellowstone → Stream Manager → Oracle / Leader / Lifecycle → AI Agent → Bundle Builder → Jito → logs + SDK |
-| Developer Integration | [`docs/sdk-integration.excalidraw`](./docs/sdk-integration.excalidraw) | Before/After: naive RPC call vs. `guard.submit(tx)` with full stack response |
-| Bundle Lifecycle & AI Retry | [`docs/bundle-lifecycle.excalidraw`](./docs/bundle-lifecycle.excalidraw) | Happy path (landed) and failure path: classifier → AI agent → retry / hold / abort loop |
+### System Architecture
+
+![SolGuard system architecture — full component graph](./docs/images/solguard_docs_architecture.png)
+
+*Full component graph: Yellowstone gRPC → Stream Manager → Congestion Oracle / Leader Window Detector / Lifecycle Tracker → AI Agent (Claude) → Bundle Builder → Jito Block Engine → Decision Ledger + Lifecycle Log → SolGuard SDK / HTTP API.*  
+Source: [`docs/architecture.excalidraw`](./docs/architecture.excalidraw)
+
+---
+
+### Developer Integration (Before / After)
+
+![Before: naive RPC call. After: guard.submit(tx) with full SolGuard pipeline](./docs/images/solguard_docs_sdk-integration.png)
+
+*Left: developer submits directly to a Solana RPC with a hardcoded tip and blind polling. Right: `guard.submit(tx)` returns a structured result with full lifecycle, while SolGuard handles tipping, bundling, confirmation, and AI-driven retry.*  
+Source: [`docs/sdk-integration.excalidraw`](./docs/sdk-integration.excalidraw)
+
+---
+
+### Bundle Lifecycle & AI Retry Loop
+
+![Bundle lifecycle — happy path and AI retry loop](./docs/images/solguard_docs_bundle-lifecycle.png)
+
+*Happy path: stream confirms landing → `{ landed: true, slot, signature, lifecycle }`. Failure path: classifier labels the error → AI agent decides retry / hold / abort → retries rebuild the bundle with a fresh tip (and refreshed blockhash if the tx is unsigned).*  
+Source: [`docs/bundle-lifecycle.excalidraw`](./docs/bundle-lifecycle.excalidraw)
+
+---
 
 ## 1. System overview
 
