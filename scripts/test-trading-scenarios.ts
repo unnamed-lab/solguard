@@ -43,7 +43,8 @@ import { connection, wallet } from "../src/solana/connection.js";
 import type { AgentInput } from "../src/agent/contract.js";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const TOKEN_MINT    = "3ifTB4CtomDdMtMPNVaVZ6ViT8oUXenk9qZbrY4KMory";
+// JUP (Jupiter governance token) — deep liquidity, ideal for swap tests
+const TOKEN_MINT    = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
 const WSOL_MINT     = "So11111111111111111111111111111111111111112";
 const SWAP_LAMPORTS = 1_000_000; // 0.001 SOL — keeps test frugal
 
@@ -285,7 +286,7 @@ async function main() {
   // S3: SLIPPAGE EXCEEDED — simulation_failed → agent ABORT
   // ─────────────────────────────────────────────────────────────────────────────
   hdr("S3 · Slippage Exceeded  —  simulation_failed → ABORT", "red");
-  info("Scenario: token price rose +3.4% between Jupiter quote and execution");
+  info("Scenario: JUP price rose +3.4% between Jupiter quote and execution");
   info("Error: 'custom program error: 0x1772' (SlippageToleranceExceeded)");
 
   const fakeBundleS3 = `fault_${Math.random().toString(36).substring(2, 14)}`;
