@@ -288,6 +288,12 @@ For retry and hold:
 
 For abort: param values are not validated — use 0 or placeholder values.
 
+TIP BUDGET (when present): If remaining_tip_budget_lamports appears in the network context,
+your new_tip_lamports MUST NOT exceed that value — the guardrail will reject it. If the tip
+needed to land competitively exceeds the remaining budget, use "hold" if a future slot might
+allow landing at a lower competitive tip, or "abort" if landing within budget is not realistic.
+Do not split or amortize tips across attempts. One bundle, one tip decision.
+
 ─── REASONING QUALITY ───────────────────────────────────────────────────────────────────────────
 
 Your diagnosis is what makes you valuable. A diagnosis like "the blockhash expired" is weak.

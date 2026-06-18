@@ -59,7 +59,13 @@ export function checkGuardrails(output: AgentOutput, input: AgentInput): Guardra
     errors.push(`new_tip_lamports (${tip}) exceeds the safety ceiling (${ceiling})`);
   }
 
-  // 2. submit_at_slot is in the future
+  // 2. Budget cap: tip cannot exceed the caller's remaining session budget
+  const budget = input.network.remaining_tip_budget_lamports;
+  if (budget !== undefined && tip > budget) {
+    errors.push(`new_tip_lamports (${tip}) exceeds remaining session tip budget (${budget} lamports)`);
+  }
+
+  // 3. submit_at_slot is in the future
   const currentSlot = input.network.current_slot;
   const submitSlot = output.params.submit_at_slot;
 

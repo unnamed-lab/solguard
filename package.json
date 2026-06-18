@@ -25,6 +25,10 @@
     "test:submit:swap": "tsx scripts/test-submit.ts -- --swap",
     "test:agent": "tsx scripts/test-agent-mainnet.ts",
     "test:trading": "tsx scripts/test-trading-scenarios.ts",
+    "test:requote": "tsx scripts/test-requote-retry.ts",
+    "test:sniper": "tsx scripts/test-sniper.ts",
+    "test:budget": "tsx scripts/test-tip-budget.ts",
+    "test:sandwich": "tsx scripts/test-sandwich-guard.ts",
     "server": "tsx src/server.ts",
     "server:watch": "tsx watch src/server.ts"
   },

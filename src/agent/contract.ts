@@ -18,6 +18,8 @@ export interface AgentInput {
     tip_floor: TipFloor;
     next_jito_leader_slot: number;
     slots_until_jito_leader: number;
+    /** Per-session tip cap set by the caller. Guardrail enforces new_tip_lamports ≤ this. */
+    remaining_tip_budget_lamports?: number;
   };
   history: Array<{
     attempt: number;
