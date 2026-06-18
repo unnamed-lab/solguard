@@ -41,6 +41,7 @@ import { decisionLedger } from "../src/agent/ledger.js";
 import { jitoClient } from "../src/jito/client.js";
 import { connection, wallet } from "../src/solana/connection.js";
 import type { AgentInput } from "../src/agent/contract.js";
+import { Spinner, Col, c, scenarioBanner, showReasoningBox, delay } from "./_ui.js";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 // JUP (Jupiter governance token) — deep liquidity, ideal for swap tests
@@ -64,7 +65,6 @@ async function jupiterSwapTx(quote: any, pubkey: string): Promise<VersionedTrans
       quoteResponse:   quote,
       userPublicKey:   pubkey,
       wrapAndUnwrapSol: true,
-      // Let SolGuard handle the Jito tip — don't embed it in Jupiter tx
       prioritizationFeeLamports: { jitoTipLamports: 0 },
     }),
   });
@@ -73,25 +73,10 @@ async function jupiterSwapTx(quote: any, pubkey: string): Promise<VersionedTrans
   return VersionedTransaction.deserialize(Buffer.from(swapTransaction, "base64"));
 }
 
-// ─── ANSI helpers ──────────────────────────────────────────────────────────────
-const C = {
-  reset: "\x1b[0m", dim: "\x1b[2m",
-  cyan: "\x1b[36m", green: "\x1b[32m", yellow: "\x1b[33m",
-  red: "\x1b[31m", purple: "\x1b[35m", white: "\x1b[97m",
-} as const;
-type Col = keyof typeof C;
-const c    = (col: Col, t: string) => `${C[col]}${t}${C.reset}`;
-const ln   = (col: Col = "cyan") => c(col, "─".repeat(54));
-const hdr  = (title: string, col: Col = "cyan") =>
-  console.log(`\n${ln(col)}\n${c(col, `  ${title}`)}\n${ln(col)}`);
 const ok   = (m: string) => console.log(`  ${c("green",  "✔")} ${m}`);
 const warn = (m: string) => console.log(`  ${c("yellow", "⚠")} ${m}`);
 const info = (m: string) => console.log(`  ${c("dim",    "·")} ${m}`);
-const act  = (a: string, m: string) => {
-  const col: Col = a === "retry" ? "cyan" : a === "abort" ? "red" : "yellow";
-  console.log(`  ${c(col, `[${a.toUpperCase()}]`)} ${m}`);
-};
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const sleep = (ms: number) => delay(ms);
 
 // ─── RPC confirm poll ─────────────────────────────────────────────────────────
 async function awaitRpc(conn: Connection, sigs: string[], ms = 25_000) {
@@ -146,7 +131,7 @@ async function main() {
   const agent   = aiAgentClient();
 
   // ── Bootstrap from RPC (avoids consuming the 1/1 gRPC slot) ─────────────────
-  hdr("BOOTSTRAP · RPC Network State", "purple");
+  scenarioBanner("BOOT", "RPC Network State", "purple");
   const oracle      = new CongestionOracle();
   const currentSlot = await conn.getSlot("confirmed");
   const tf          = await tipFloorService().get();
@@ -177,7 +162,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────────────
   // S1: HAPPY SWAP — uses SolGuard SDK (full pipeline: stream → tip → bundle)
   // ─────────────────────────────────────────────────────────────────────────────
-  hdr("S1 · Happy Swap  —  SOL → Token (real on-chain)", "cyan");
+  scenarioBanner("S1", "Happy Swap  —  SOL → JUP (real on-chain)", "cyan");
 
   let s1Landed = false;
   let s1Sig: string | null = null;
@@ -223,7 +208,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────────────
   // S2: STALE QUOTE — blockhash_expired → agent RETRY with fresh quote
   // ─────────────────────────────────────────────────────────────────────────────
-  hdr("S2 · Stale Quote  —  blockhash_expired → RETRY", "yellow");
+  scenarioBanner("S2", "Stale Quote  —  blockhash_expired → RETRY", "yellow");
   info("Scenario: swap TX built at T, blockhash expired by T+30s before confirmation");
 
   const realBh = await fetchConfirmedBlockhash();
@@ -262,10 +247,11 @@ async function main() {
     history: [{ attempt: 1, outcome: "blockhash_expired" }],
   };
 
-  info("Calling AI agent…");
+  const s2Spin = new Spinner();
+  s2Spin.start("AI agent reasoning about stale blockhash…");
   const { decision: s2Dec, ledgerTs: s2Ts } = await agent.decide(s2Input, "injected_fault");
-  act(s2Dec.action, s2Dec.diagnosis.substring(0, 88));
-  info(`confidence: ${Math.round(s2Dec.confidence*100)} %   refresh_blockhash: ${s2Dec.params.refresh_blockhash}`);
+  s2Spin.clear();
+  await showReasoningBox(s2Dec.root_cause, s2Dec.diagnosis, s2Dec.action, s2Dec.confidence, s2Dec.params, currentSlot);
 
   if (s2Dec.action === "retry") {
     info("Re-quoting Jupiter (price may have moved) + fresh blockhash…");
@@ -285,7 +271,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────────────
   // S3: SLIPPAGE EXCEEDED — simulation_failed → agent ABORT
   // ─────────────────────────────────────────────────────────────────────────────
-  hdr("S3 · Slippage Exceeded  —  simulation_failed → ABORT", "red");
+  scenarioBanner("S3", "Slippage Exceeded  —  simulation_failed → ABORT", "red");
   info("Scenario: JUP price rose +3.4% between Jupiter quote and execution");
   info("Error: 'custom program error: 0x1772' (SlippageToleranceExceeded)");
 
@@ -313,10 +299,12 @@ async function main() {
     history: [{ attempt: 1, outcome: "simulation_failed" }],
   };
 
-  info("Calling AI agent…");
+  const s3Spin = new Spinner();
+  s3Spin.start("AI agent reasoning about slippage failure…");
   const { decision: s3Dec, ledgerTs: s3Ts } = await agent.decide(s3Input, "injected_fault");
-  act(s3Dec.action, s3Dec.diagnosis.substring(0, 88));
-  info(`confidence: ${Math.round(s3Dec.confidence*100)} %`);
+  s3Spin.clear();
+  await showReasoningBox(s3Dec.root_cause, s3Dec.diagnosis, s3Dec.action, s3Dec.confidence, s3Dec.params, currentSlot);
+
   decisionLedger().updateOutcome(s3Ts, fakeBundleS3,
     s3Dec.action === "abort"
       ? "aborted — slippage not fixable by retry (re-quote required)"
@@ -326,7 +314,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────────────
   // S4: JITO LEADER SKIPPED — hot-mint spike → agent HOLD
   // ─────────────────────────────────────────────────────────────────────────────
-  hdr("S4 · Jito Leader Skipped  —  hot-mint rush → HOLD", "yellow");
+  scenarioBanner("S4", "Jito Leader Skipped  —  hot-mint rush → HOLD", "yellow");
   info("Scenario: token launch — Jito validator skips their slot, skip rate 18%");
   info(`Next healthy Jito window: slot ${currentSlot + 22}`);
 
@@ -348,10 +336,12 @@ async function main() {
     history: [{ attempt: 1, outcome: "bundle_dropped_leader_skip" }],
   };
 
-  info("Calling AI agent…");
+  const s4Spin = new Spinner();
+  s4Spin.start("AI agent reasoning about leader skip + congestion spike…");
   const { decision: s4Dec, ledgerTs: s4Ts } = await agent.decide(s4Input, "injected_fault");
-  act(s4Dec.action, s4Dec.diagnosis.substring(0, 88));
-  info(`confidence: ${Math.round(s4Dec.confidence*100)} %`);
+  s4Spin.clear();
+  await showReasoningBox(s4Dec.root_cause, s4Dec.diagnosis, s4Dec.action, s4Dec.confidence, s4Dec.params, currentSlot);
+
   info(`submit_at_slot: ${s4Dec.params.submit_at_slot?.toLocaleString() ?? "—"}   new_tip: ${s4Dec.params.new_tip_lamports.toLocaleString()} lmp`);
   decisionLedger().updateOutcome(s4Ts, fakeBundleS4,
     s4Dec.action === "hold"
@@ -362,7 +352,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────────────
   // S5: FEE TOO LOW — token launch rush → agent RETRY (tip → p95)
   // ─────────────────────────────────────────────────────────────────────────────
-  hdr("S5 · Token Launch Rush  —  fee_too_low → RETRY (p95)", "yellow");
+  scenarioBanner("S5", "Token Launch Rush  —  fee_too_low → RETRY (p95)", "yellow");
   info("Scenario: competitive token launch — 1-lamport tip loses the Jito auction");
   info(`Congestion: skip rate 15 %   multiplier 3.5×   p95=${tf.p95.toLocaleString()} lmp`);
 
@@ -384,10 +374,12 @@ async function main() {
     history: [{ attempt: 1, outcome: "fee_too_low" }],
   };
 
-  info("Calling AI agent…");
+  const s5Spin = new Spinner();
+  s5Spin.start("AI agent reasoning about tip auction loss…");
   const { decision: s5Dec, ledgerTs: s5Ts } = await agent.decide(s5Input, "injected_fault");
-  act(s5Dec.action, s5Dec.diagnosis.substring(0, 88));
-  info(`confidence: ${Math.round(s5Dec.confidence*100)} %`);
+  s5Spin.clear();
+  await showReasoningBox(s5Dec.root_cause, s5Dec.diagnosis, s5Dec.action, s5Dec.confidence, s5Dec.params, currentSlot);
+
   info(`tip escalated: 1 lmp → ${s5Dec.params.new_tip_lamports.toLocaleString()} lmp`);
   if (s5Dec.params.tip_percentile_target != null)
     info(`percentile target: p${s5Dec.params.tip_percentile_target}`);
@@ -400,7 +392,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────────────
   // SUMMARY
   // ─────────────────────────────────────────────────────────────────────────────
-  hdr("RESULTS SUMMARY", "green");
+  scenarioBanner("", "RESULTS SUMMARY", "green");
 
   type Row = [string, string, string, string];
   const rows: Row[] = [

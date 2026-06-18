@@ -40,26 +40,12 @@ import { decisionLedger } from "../src/agent/ledger.js";
 import { jitoClient } from "../src/jito/client.js";
 import { connection, wallet } from "../src/solana/connection.js";
 import type { AgentInput } from "../src/agent/contract.js";
+import { Spinner, c, scenarioBanner, showReasoningBox, delay } from "./_ui.js";
 
-// ─── ANSI helpers ─────────────────────────────────────────────────────────────
-const C = {
-  reset: "\x1b[0m", bold: "\x1b[1m", dim: "\x1b[2m",
-  cyan: "\x1b[36m", green: "\x1b[32m", yellow: "\x1b[33m",
-  red: "\x1b[31m", purple: "\x1b[35m", white: "\x1b[97m",
-} as const;
-function c(color: keyof typeof C, txt: string) { return `${C[color]}${txt}${C.reset}`; }
-function banner(title: string, color: keyof typeof C = "cyan") {
-  const line = "─".repeat(52);
-  console.log(`\n${c(color, line)}\n${c(color, `  ${title}`)}\n${c(color, line)}`);
-}
-function ok(msg: string)   { console.log(`  ${c("green",  "✔")} ${msg}`); }
-function warn(msg: string) { console.log(`  ${c("yellow", "⚠")} ${msg}`); }
-function info(msg: string) { console.log(`  ${c("dim",    "·")} ${msg}`); }
-function act(action: string, msg: string) {
-  const col: keyof typeof C = action === "retry" ? "cyan" : action === "hold" ? "yellow" : "red";
-  console.log(`  ${c(col, `[${action.toUpperCase()}]`)} ${msg}`);
-}
-function sleep(ms: number) { return new Promise<void>((r) => setTimeout(r, ms)); }
+const ok   = (m: string) => console.log(`  ${c("green",  "✔")} ${m}`);
+const warn = (m: string) => console.log(`  ${c("yellow", "⚠")} ${m}`);
+const info = (m: string) => console.log(`  ${c("dim",    "·")} ${m}`);
+const sleep = (ms: number) => delay(ms);
 
 // ─── RPC-based confirmation (no extra gRPC stream needed) ────────────────────
 async function awaitRpcConfirm(sigs: string[], timeoutMs = 25_000): Promise<boolean> {
@@ -115,14 +101,14 @@ async function main() {
   console.log(c("purple", "\n╔══════════════════════════════════════════════════════╗"));
   console.log(c("purple",   "║   SolGuard — Live Mainnet AI Agent Test Harness      ║"));
   console.log(c("purple",   "╚══════════════════════════════════════════════════════╝"));
-  console.log(c("dim",      "  All 4 fault scenarios · Real oracle data · Real AI\n"));
+  console.log(c("dim",      "  4 fault scenarios · Real mainnet data · Real AI reasoning\n"));
 
   const conn  = connection();
   const payer = wallet();
   const tracker = new LifecycleTracker("logs/lifecycle.jsonl");
 
   // ── Phase 0: Bootstrap from RPC (preserve the 1/1 gRPC slot for the server) ─
-  banner("PHASE 0 · Bootstrapping Network Data from RPC", "purple");
+  scenarioBanner("BOOT", "Bootstrapping Network Data from RPC", "purple");
   info("Fetching live slot, tip floor, and congestion data…");
 
   const oracle = new CongestionOracle();
@@ -171,7 +157,7 @@ async function main() {
   };
 
   // ─── SCENARIO 1: Happy Path ───────────────────────────────────────────────
-  banner("SCENARIO 1 · Happy Path — SOL Transfer");
+  scenarioBanner("S1 ●", "Happy Path — SOL Transfer (no failure)", "cyan");
 
   const s1Bh = await fetchConfirmedBlockhash();
   const { landed: s1Landed, sig: s1Sig } = await submitAndConfirm(
@@ -187,7 +173,7 @@ async function main() {
   }
 
   // ─── SCENARIO 2: Blockhash Expired ────────────────────────────────────────
-  banner("SCENARIO 2 · blockhash_expired → RETRY → lands", "yellow");
+  scenarioBanner("S2 ●", "blockhash_expired — stale BH injected mid-flight", "yellow");
 
   const realBh = await fetchConfirmedBlockhash();
   const staleBh: BlockhashInfo = {
@@ -234,11 +220,11 @@ async function main() {
     history: [{ attempt: 1, outcome: "blockhash_expired" }],
   };
 
-  info("Calling AI agent…");
+  const s2Spinner = new Spinner();
+  s2Spinner.start("AI agent reasoning about blockhash_expired…");
   const { decision: s2Dec, ledgerTs: s2Ts } = await agent.decide(s2Input, "injected_fault");
-  act(s2Dec.action, s2Dec.diagnosis.substring(0, 90));
-  info(`confidence: ${Math.round(s2Dec.confidence * 100)} %`);
-  info(`refresh_blockhash: ${s2Dec.params.refresh_blockhash} | new_tip: ${s2Dec.params.new_tip_lamports.toLocaleString()} lmp`);
+  s2Spinner.clear();
+  await showReasoningBox(s2Failure.type, s2Dec.diagnosis, s2Dec.action, s2Dec.confidence, s2Dec.params, currentSlot);
 
   if (s2Dec.action === "retry") {
     info("Executing AI-ordered retry with fresh blockhash…");
@@ -258,9 +244,7 @@ async function main() {
   }
 
   // ─── SCENARIO 3: Fee Too Low ───────────────────────────────────────────────
-  // Jito rejects bundles with 1-lamport tips with HTTP 400, so we inject the
-  // failure context directly rather than submitting. The AI decision is the proof.
-  banner("SCENARIO 3 · fee_too_low → RETRY (escalated tip)", "yellow");
+  scenarioBanner("S3 ●", "fee_too_low — 1-lamport tip, congestion 2.5×", "yellow");
 
   const LOW_TIP = 1;
   info(`Injecting failure context: tip=${LOW_TIP} lmp, floor p50=${tf.p50.toLocaleString()} lmp`);
@@ -298,11 +282,11 @@ async function main() {
     history: [{ attempt: 1, outcome: "fee_too_low" }],
   };
 
-  info("Calling AI agent…");
+  const s3Spinner = new Spinner();
+  s3Spinner.start("AI agent reasoning about fee_too_low…");
   const { decision: s3Dec, ledgerTs: s3Ts } = await agent.decide(s3Input, "injected_fault");
-  act(s3Dec.action, s3Dec.diagnosis.substring(0, 90));
-  info(`confidence: ${Math.round(s3Dec.confidence * 100)} %`);
-  info(`new_tip: ${s3Dec.params.new_tip_lamports.toLocaleString()} lmp | percentile: p${s3Dec.params.tip_percentile_target}`);
+  s3Spinner.clear();
+  await showReasoningBox(s3Failure.type, s3Dec.diagnosis, s3Dec.action, s3Dec.confidence, s3Dec.params, currentSlot);
 
   decisionLedger().updateOutcome(
     s3Ts, fakeS3BundleId,
@@ -313,7 +297,7 @@ async function main() {
   ok("Ledger updated");
 
   // ─── SCENARIO 4: Compute Exceeded ─────────────────────────────────────────
-  banner("SCENARIO 4 · compute_exceeded → ABORT", "red");
+  scenarioBanner("S4 ●", "compute_exceeded — 15M CU instruction injected", "red");
 
   info("Injecting failure context: ComputeBudget 15,000,000 CUs (limit: 1,400,000)");
 
@@ -341,11 +325,11 @@ async function main() {
     history: [{ attempt: 1, outcome: "compute_exceeded" }],
   };
 
-  info("Calling AI agent…");
+  const s4Spinner = new Spinner();
+  s4Spinner.start("AI agent reasoning about compute_exceeded…");
   const { decision: s4Dec, ledgerTs: s4Ts } = await agent.decide(s4Input, "injected_fault");
-  act(s4Dec.action, s4Dec.diagnosis.substring(0, 90));
-  info(`confidence: ${Math.round(s4Dec.confidence * 100)} %`);
-  info(`root_cause : ${s4Dec.root_cause}`);
+  s4Spinner.clear();
+  await showReasoningBox(s4Failure.type, s4Dec.diagnosis, s4Dec.action, s4Dec.confidence, s4Dec.params, currentSlot);
 
   decisionLedger().updateOutcome(
     s4Ts, fakeS4BundleId,
@@ -354,7 +338,7 @@ async function main() {
   ok("Ledger updated");
 
   // ─── Summary ───────────────────────────────────────────────────────────────
-  banner("RESULTS SUMMARY", "green");
+  scenarioBanner("DONE", "Results Summary", "green");
 
   const rows: [string, string, string, string][] = [
     ["S1", "happy_path",        s1Landed ? "landed" : "sent",  "—"],
@@ -363,12 +347,11 @@ async function main() {
     ["S4", "compute_exceeded",  s4Dec.action,                  `${Math.round(s4Dec.confidence * 100)} %`],
   ];
 
-  console.log(`\n  ${"".padEnd(4)} ${"Failure Type".padEnd(24)} ${"Action".padEnd(9)} Conf`);
+  console.log(`\n  ${"ID".padEnd(4)} ${"Failure Type".padEnd(24)} ${"Action".padEnd(9)} Conf`);
   console.log(`  ${"─".repeat(50)}`);
   for (const [id, type, action, conf] of rows) {
-    const ac: keyof typeof C =
-      action === "retry" || action === "landed" || action === "sent" ? "green"
-      : action === "abort" ? "red" : action === "hold" ? "yellow" : "white";
+    const ac = action === "retry" || action === "landed" || action === "sent" ? "green"
+      : action === "abort" ? "red" : action === "hold" ? "yellow" : "white" as const;
     console.log(`  ${c("dim", id.padEnd(4))}${type.padEnd(24)}${c(ac, action.padEnd(9))} ${conf}`);
   }
 
