@@ -51,14 +51,14 @@ const SWAP_LAMPORTS = 1_000_000; // 0.001 SOL — keeps test frugal
 
 // ─── Jupiter ──────────────────────────────────────────────────────────────────
 async function jupiterQuote(inMint: string, outMint: string, amount: number) {
-  const url = `https://quote-api.jup.ag/v6/quote?inputMint=${inMint}&outputMint=${outMint}&amount=${amount}&slippageBps=100`;
+  const url = `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inMint}&outputMint=${outMint}&amount=${amount}&slippageBps=100`;
   const r = await fetch(url, { headers: { Accept: "application/json" } });
   if (!r.ok) throw new Error(`Jupiter quote HTTP ${r.status}: ${await r.text()}`);
   return r.json() as Promise<any>;
 }
 
 async function jupiterSwapTx(quote: any, pubkey: string): Promise<VersionedTransaction> {
-  const r = await fetch("https://quote-api.jup.ag/v6/swap", {
+  const r = await fetch("https://lite-api.jup.ag/swap/v1/swap", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

@@ -38,14 +38,14 @@ function sol(lamports: number) {
 
 // ── Jupiter helpers ──────────────────────────────────────────────────────────
 async function jupiterQuote(inputMint: string, outputMint: string, amountLamports: number) {
-  const url = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountLamports}&slippageBps=100`;
+  const url = `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountLamports}&slippageBps=100`;
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`Jupiter quote failed: HTTP ${res.status}`);
   return res.json();
 }
 
 async function jupiterSwapTx(quoteResponse: unknown, walletPubkey: string): Promise<VersionedTransaction> {
-  const res = await fetch("https://quote-api.jup.ag/v6/swap", {
+  const res = await fetch("https://lite-api.jup.ag/swap/v1/swap", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

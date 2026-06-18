@@ -47,14 +47,14 @@ const SLIPPAGE_BPS  = 150;       // 1.5% tolerance — standard for active token
 
 // ─── Jupiter helpers ──────────────────────────────────────────────────────────
 async function jupiterQuote(inMint: string, outMint: string, amount: number, slippageBps: number) {
-  const url = `https://quote-api.jup.ag/v6/quote?inputMint=${inMint}&outputMint=${outMint}&amount=${amount}&slippageBps=${slippageBps}`;
+  const url = `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inMint}&outputMint=${outMint}&amount=${amount}&slippageBps=${slippageBps}`;
   const r = await fetch(url, { headers: { Accept: "application/json" } });
   if (!r.ok) throw new Error(`Jupiter quote HTTP ${r.status}`);
   return r.json() as Promise<any>;
 }
 
 async function jupiterSwapTx(quote: any, pubkey: string): Promise<VersionedTransaction> {
-  const r = await fetch("https://quote-api.jup.ag/v6/swap", {
+  const r = await fetch("https://lite-api.jup.ag/swap/v1/swap", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
