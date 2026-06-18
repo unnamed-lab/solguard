@@ -123,6 +123,14 @@ pnpm fault:test           # end-to-end fault injection (offline mock)
 pnpm fault:test:evidence  # same, but requires live ANTHROPIC_API_KEY
 pnpm test                 # unit tests (54 tests)
 pnpm lint:tips            # no-hardcoded-tip guard
+
+# Use-case test harnesses (require live ANTHROPIC_API_KEY + funded wallet)
+pnpm test:agent           # 4 mainnet fault scenarios with AI reasoning box
+pnpm test:trading         # 5 trader scenarios: swap, slippage, leader skip, fee low
+pnpm test:requote         # Re-quote retry loop: slippage failure → fresh price → land
+pnpm test:sniper          # Token launch sniper: pool detection → quote → bundle race
+pnpm test:budget          # Tip budget cap: AI adapts as session budget shrinks
+pnpm test:sandwich        # MEV sandwich protection: public TX risk vs bundle privacy
 ```
 
 ### Required credentials (`.env`)
@@ -134,6 +142,23 @@ pnpm lint:tips            # no-hardcoded-tip guard
 - `ANTHROPIC_API_KEY` — AI agent (Phase 4+)
 
 See [`.env.example`](./.env.example) for the full annotated list.
+
+---
+
+## Test Harnesses
+
+Six executable test harnesses demonstrate every layer of the stack against live mainnet data. Each uses real Anthropic AI calls, real Jito bundle submissions, and live tip floor pricing — no mocks.
+
+| Command | What it tests | Real SOL spent |
+|---|---|---|
+| `pnpm test:agent` | 4 mainnet fault scenarios (happy path, blockhash expired, fee too low, compute exceeded). AI reasoning shown via typewriter box. | < 0.001 SOL (tip only) |
+| `pnpm test:trading` | 5 trader scenarios through a Jupiter swap stack: happy swap, stale quote, slippage exceeded, leader skip, launch rush. | S1 only: ~0.003 SOL |
+| `pnpm test:requote` | Slippage failure lifecycle: initial quote → `simulation_failed` injected → AI classifies → re-quote at 200 bps + fresh price → resubmit. Demonstrates that SolGuard re-quotes rather than blindly aborting. | ~0.004 SOL (if balance ≥ 0.01) |
+| `pnpm test:sniper` | Token launch sniper pipeline: synthetic pool creation event fires → Jupiter quote fetched → bundle assembled → submitted to Jito. Measures detection-to-submission latency in ms and slot delta. Shows why same-slot or +1 slot submission wins a launch. | ~0.002 SOL |
+| `pnpm test:budget` | Per-session tip budget enforcement. Session budget is derived from `tf.p75 × 8` (live floor, no hardcoded values). Three consecutive failures progressively drain the budget; AI agent receives `remaining_tip_budget_lamports` in every decision context and must adapt — tip conservatively when budget tightens, hold or abort when exhausted. Guardrail re-prompts if AI recommends a tip above the remaining budget. | None (fault injection only) |
+| `pnpm test:sandwich` | MEV sandwich protection comparison. Quotes a real SOL → JUP swap, models sandwich profitability (MEV extractable ≈ price impact × trade size × 0.5), animates the frontrun/backrun attack sequence for the public TX path, then submits the identical swap as a SolGuard Jito bundle. Side-by-side table shows tokens received, MEV loss, and net protection benefit vs tip cost. | ~0.006 SOL (if balance ≥ 0.012) |
+
+All test harnesses print a live spinner while the AI agent thinks, then reveal the full reasoning via a typewriter box showing diagnosis, action, confidence, and exact params used.
 
 ---
 
