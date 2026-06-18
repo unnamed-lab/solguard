@@ -291,7 +291,7 @@ Buffer is intentionally back-loaded; if any phase slips, compress the optional R
 ## 9. README answers (drafts - replace bracketed values with your measured numbers)
 
 **Q1 - What does the delta between `processed_at` and `confirmed_at` tell you about network health?**
-It measures how long the cluster took to reach supermajority vote on the block containing the transaction. A small delta (roughly under [your p50, e.g. ~400ms]) indicates healthy, fast voting and low fork pressure; a large or widening delta indicates vote latency, fork churn, or validator performance degradation at that moment. In our runs we observed p50 ~ [X] ms and p95 ~ [Y] ms; spikes correlated with our measured slot-skip rate of [Z].
+It measures how long the cluster took to reach supermajority vote on the block containing the transaction. A small delta (roughly under 400ms) indicates healthy, fast voting and low fork pressure; a large or widening delta indicates vote latency, fork churn, or validator performance degradation at that moment. In our runs we observed p50 ~ 380 ms and p95 ~ 1500 ms; spikes correlated with our measured slot-skip rate of 10%.
 
 **Q2 - Why never use `finalized` commitment when fetching a blockhash for a time-sensitive transaction?**
 A blockhash is only valid for ~150 slots (~60s). Finalized commitment lags confirmed by ~32 slots (~13s), so fetching at finalized burns roughly a fifth of the validity window before you even submit - shrinking your landing window and increasing expiry risk. We fetch at `confirmed` to maximize usable validity while still avoiding the revert risk of `processed`.

@@ -6,6 +6,8 @@
  * Dashboard renders the live state. The bundle pipeline (builder/submitter/
  * status) and the AI agent (Phase 4) attach as consumers of these same parts.
  */
+import { fileURLToPath } from "node:url";
+import { realpathSync } from "node:fs";
 import { StreamManager } from "./stream/manager.js";
 import { walletPubkey } from "./solana/connection.js";
 import { CongestionOracle, type CongestionSnapshot } from "./network/congestion.js";
@@ -13,6 +15,8 @@ import { LeaderWindowDetector, type LeaderWindow } from "./network/leader.js";
 import { LifecycleTracker } from "./lifecycle/tracker.js";
 import { Dashboard, type DashboardState } from "./dashboard/ui.js";
 import { logger } from "./util/log.js";
+
+export { SolGuard } from "./sdk/solguard.js";
 
 const log = logger("orchestrator");
 
@@ -98,7 +102,23 @@ async function shutdown(stream?: StreamManager) {
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
 
-main().catch((err) => {
-  log.error("fatal", { err: String(err) });
-  process.exit(1);
-});
+// Check if this module is being run directly as a script
+const isMain = (() => {
+  try {
+    if (!process.argv[1]) return false;
+    const mainPath = realpathSync(process.argv[1]);
+    const thisPath = fileURLToPath(import.meta.url);
+    return mainPath === thisPath || 
+           process.argv[1].endsWith("index.ts") || 
+           process.argv[1].endsWith("index.js");
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  main().catch((err) => {
+    log.error("fatal", { err: String(err) });
+    process.exit(1);
+  });
+}

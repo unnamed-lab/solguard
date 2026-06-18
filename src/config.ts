@@ -64,6 +64,7 @@ export const config = {
 
   anthropic: {
     apiKey: opt("ANTHROPIC_API_KEY", ""), // required for the AI decision agent
+    baseURL: opt("ANTHROPIC_BASE_URL", ""), // optional custom base URL
     model: opt("ANTHROPIC_MODEL", "claude-opus-4-8"),
   },
 

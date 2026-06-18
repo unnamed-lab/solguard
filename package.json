@@ -20,7 +20,9 @@
     "test:watch": "vitest",
     "lint:tips": "node scripts/check-no-hardcoded-tips.mjs",
     "fault:test": "tsx scripts/fault-test.ts",
-    "fault:test:evidence": "tsx scripts/fault-test.ts --evidence"
+    "fault:test:evidence": "tsx scripts/fault-test.ts --evidence",
+    "server": "tsx src/server.ts",
+    "server:watch": "tsx watch src/server.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

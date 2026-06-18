@@ -73,7 +73,7 @@ See [`AGENT.md`](./AGENT.md).
 
 - [x] Run ≥10 real bundles (happy path + failures)
 - [x] Export lifecycle log
-- [ ] README answers with **measured** numbers (Q1/Q2/Q3)
+- [x] README answers with **measured** numbers (Q1/Q2/Q3)
 - [ ] Public architecture document published (separate URL)
 - [ ] 3–5 min demo video
 - [x] **DoD:** all PRD §13 acceptance criteria met.

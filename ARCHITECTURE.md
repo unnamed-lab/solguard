@@ -4,6 +4,16 @@
 > of truth; the public hosted version (Notion/Docs/Figma) is exported from it.
 > Keep it current from Phase 1 onward.
 
+## 0. Diagrams
+
+Open in [Excalidraw](https://excalidraw.com) (File → Open) or any VS Code Excalidraw extension.
+
+| Diagram | File | What it shows |
+|---|---|---|
+| System Architecture | [`docs/architecture.excalidraw`](./docs/architecture.excalidraw) | Full component graph — Yellowstone → Stream Manager → Oracle / Leader / Lifecycle → AI Agent → Bundle Builder → Jito → logs + SDK |
+| Developer Integration | [`docs/sdk-integration.excalidraw`](./docs/sdk-integration.excalidraw) | Before/After: naive RPC call vs. `guard.submit(tx)` with full stack response |
+| Bundle Lifecycle & AI Retry | [`docs/bundle-lifecycle.excalidraw`](./docs/bundle-lifecycle.excalidraw) | Happy path (landed) and failure path: classifier → AI agent → retry / hold / abort loop |
+
 ## 1. System overview
 
 SolGuard is a smart Solana transaction stack. A live Yellowstone/Geyser gRPC
@@ -149,3 +159,25 @@ SQLite mirror for querying. Slots reconcile with public explorers.
 TypeScript / Node 20+ / ESM · `@triton-one/yellowstone-grpc` ·
 `@solana/web3.js` · Jito block-engine REST · `@anthropic-ai/sdk` · pnpm.
 Optional depth flex: port the Stream Manager to Rust (note only).
+
+## 9. Developer surface (SDK + HTTP API)
+
+SolGuard exposes its entire pipeline to application developers through two entry points, both defined as **zero-copy wrappers** around the same internal engine:
+
+| Entry point | Location | How |
+|---|---|---|
+| TypeScript SDK | `src/sdk/solguard.ts` | `new SolGuard(); guard.start(); guard.submit(tx)` |
+| HTTP API | `src/server.ts` | `POST /submit` · `GET /health` · `PORT` env var |
+
+**`submit()` input matrix:**
+
+| Input type | Blockhash refresh on retry? | Notes |
+|---|---|---|
+| `TransactionInstruction[]` | ✅ Yes | SolGuard compiles, signs with `WALLET_SECRET_KEY` |
+| `VersionedTransaction` / `Transaction` (unsigned) | ✅ Yes | SolGuard re-signs |
+| Pre-signed transaction | ❌ No | Sent as-is; aborts with descriptive error if refresh needed |
+| Base64 / Base58 string | Depends | Deserialized then routed as above |
+
+The terminal dashboard (`pnpm start`) is a separate consumer of the same internal engine — it is the **ops/demo view**, not the product surface. The SDK and HTTP API are what trading bots and apps integrate against.
+
+See also: [`docs/sdk-integration.excalidraw`](./docs/sdk-integration.excalidraw) (before/after diagram).
