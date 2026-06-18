@@ -11,7 +11,7 @@ SolGuard ships as two things at once:
 - **Demo dashboard** — a terminal UI (`pnpm start`) that visualises the running stack for judges and ops teams. It is the _window into_ the infrastructure, not the product itself.
 
 **Bounty:** Advanced Infrastructure Challenge — Build a Smart Transaction Stack (Superteam Nigeria)  
-**Docs:** [`PRD.md`](./PRD.md) · [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) · [`ARCHITECTURE.md`](./ARCHITECTURE.md) · [`AGENT.md`](./AGENT.md) · [`TASK.md`](./TASK.md)
+**Docs:** [`PRD.md`](./PRD.md) · [`ARCHITECTURE.md`](./ARCHITECTURE.md) · [`AGENT.md`](./AGENT.md) · [`docs/`](./docs/)
 
 ---
 
