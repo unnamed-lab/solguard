@@ -40,8 +40,11 @@ export class AIAgentClient {
       );
     }
 
-    this.anthropic = new Anthropic({ apiKey: key });
-    log.info("AI agent client initialized", { model: config.anthropic.model });
+    this.anthropic = new Anthropic({
+      apiKey: key,
+      baseURL: config.anthropic.baseURL || undefined,
+    });
+    log.info("AI agent client initialized", { model: config.anthropic.model, baseURL: config.anthropic.baseURL || "default" });
   }
 
   /**
