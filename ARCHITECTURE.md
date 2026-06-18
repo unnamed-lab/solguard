@@ -1,37 +1,113 @@
 # ARCHITECTURE — SolGuard
 
-> Judged separately and weighted heavily (PRD §4). This is the in-repo source
-> of truth; the public hosted version (Notion/Docs/Figma) is exported from it.
-> Keep it current from Phase 1 onward.
+> This document is the public architecture submission for the Superteam Nigeria
+> Advanced Infrastructure Challenge. It is hosted in the repository at
+> `https://github.com/[your-repo]/blob/main/ARCHITECTURE.md` and covers all
+> required sections: system architecture, key components, data flow, infrastructure
+> decisions, failure handling strategy, and AI agent responsibilities.
 
 ## 0. Diagrams
 
-> Source files in `docs/*.excalidraw` — open with [Excalidraw](https://excalidraw.com) (File → Open) or the VS Code Excalidraw extension to edit.
+### System Architecture — Full Component Graph
 
-### System Architecture
+```
+                 ┌────────────────────────────────┐
+   Yellowstone   │  Stream Manager                 │
+   gRPC ────────▶│  • reconnect + fromSlot replay  │
+   (Solinfra)    │  • ping/pong keepalive           │
+                 │  • bounded queue (drop-oldest)   │
+                 │  • dedupe (slot|status, sig)     │
+                 └──────────────┬─────────────────┘
+                                │ normalized SlotEvent / TxEvent
+               ┌────────────────┼─────────────────┐
+               ▼                ▼                  ▼
+    ┌─────────────────┐ ┌────────────┐ ┌──────────────────┐
+    │ Congestion      │ │ Leader     │ │ Lifecycle        │
+    │ Oracle          │ │ Window     │ │ Tracker          │
+    │ (64-slot window │ │ Detector   │ │ (stream-primary) │
+    │  skip rate,     │ │            │ │ submitted →      │
+    │  P→C delta p50) │ │            │ │ processed →      │
+    └────────┬────────┘ └─────┬──────┘ │ confirmed →      │
+             │                │        │ finalized         │
+             └────────┬───────┘        └──────────┬───────┘
+                      │                           │
+            ┌─────────▼──────────┐                │ failure → classifier
+            │  Tip Model         │                ▼
+            │  tip = percentile  │   ┌─────────────────────┐
+            │   × congestion_mul │   │  Failure Classifier  │
+            └─────────┬──────────┘   │  (5 failure types)  │
+                      │              └──────────┬──────────┘
+                      │                         │
+                      └─────────┬───────────────┘
+                                ▼
+                   ┌────────────────────────┐      ┌─────────────────┐
+                   │  AI Agent              │─────▶│  DeepSeek /     │
+                   │  (decision core)       │      │  Anthropic API  │
+                   │  • strict-JSON output  │      └─────────────────┘
+                   │  • guardrail validate  │
+                   │  • decision ledger     │
+                   └────────────┬───────────┘
+                                │ retry / hold / abort + new tip + slot
+                                ▼
+                   ┌────────────────────────┐
+                   │  Bundle Builder        │  tip = f(oracle, tip_floor)
+                   │  + Submitter           │  8 tip accounts (random)
+                   │  • ≤5 versioned tx     │  confirmed blockhash only
+                   │  • tip transfer last   │─▶ Jito Block Engine
+                   │  • RPC fallback (2 s)  │  /api/v1/bundles
+                   └────────────────────────┘
+                                │
+                   ┌────────────▼───────────┐
+                   │  Decision Ledger       │  logs/decisions.jsonl
+                   │  Lifecycle Log         │  logs/lifecycle.jsonl
+                   └────────────────────────┘
+                                │
+                   ┌────────────▼───────────┐
+                   │  SolGuard SDK          │  new SolGuard(); guard.submit(tx)
+                   │  HTTP API              │  POST /submit  GET /health
+                   └────────────────────────┘
+```
 
-![SolGuard system architecture — full component graph](./docs/images/solguard_docs_architecture.png)
+### Developer Integration — Before / After
 
-*Full component graph: Yellowstone gRPC → Stream Manager → Congestion Oracle / Leader Window Detector / Lifecycle Tracker → AI Agent (Claude) → Bundle Builder → Jito Block Engine → Decision Ledger + Lifecycle Log → SolGuard SDK / HTTP API.*  
-Source: [`docs/architecture.excalidraw`](./docs/architecture.excalidraw)
+```
+BEFORE (naive)                        AFTER (SolGuard)
+──────────────────────────────        ───────────────────────────────────────────
+connection.sendTransaction(tx)   vs.  const guard = new SolGuard();
+  → hardcoded tip                       await guard.start();
+  → no leader awareness                 const result = await guard.submit(tx);
+  → blind RPC polling                   // result.landed, result.slot,
+  → no retry on failure                 // result.lifecycle, result.signature
+  → no AI reasoning
+```
 
----
+### Bundle Lifecycle & AI Retry Flow
 
-### Developer Integration (Before / After)
-
-![Before: naive RPC call. After: guard.submit(tx) with full SolGuard pipeline](./docs/images/solguard_docs_sdk-integration.png)
-
-*Left: developer submits directly to a Solana RPC with a hardcoded tip and blind polling. Right: `guard.submit(tx)` returns a structured result with full lifecycle, while SolGuard handles tipping, bundling, confirmation, and AI-driven retry.*  
-Source: [`docs/sdk-integration.excalidraw`](./docs/sdk-integration.excalidraw)
-
----
-
-### Bundle Lifecycle & AI Retry Loop
-
-![Bundle lifecycle — happy path and AI retry loop](./docs/images/solguard_docs_bundle-lifecycle.png)
-
-*Happy path: stream confirms landing → `{ landed: true, slot, signature, lifecycle }`. Failure path: classifier labels the error → AI agent decides retry / hold / abort → retries rebuild the bundle with a fresh tip (and refreshed blockhash if the tx is unsigned).*  
-Source: [`docs/bundle-lifecycle.excalidraw`](./docs/bundle-lifecycle.excalidraw)
+```
+  submit()
+     │
+     ├── [tip model] → dynamic lamports (no hardcode)
+     ├── [leader detector] → wait for Jito window
+     ├── [bundle builder] → confirmed blockhash + tip tx
+     │
+     ▼
+  Jito Block Engine ──▶ Lifecycle Tracker (stream-primary)
+     │                        │
+     │                        ├── processed  (tx seen in stream)
+     │                        ├── confirmed  (slot confirmed via stream)
+     │                        └── finalized  (slot finalized via stream)
+     │
+     └── [timeout / Invalid] ──▶ Failure Classifier
+                                       │
+                                       ▼
+                              AI Agent (reason + decide)
+                                 │         │        │
+                               RETRY     HOLD    ABORT
+                                 │         │
+                           refresh bh,   wait for
+                           new tip,      next Jito
+                           resubmit      window
+```
 
 ---
 

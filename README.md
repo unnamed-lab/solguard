@@ -11,7 +11,8 @@ SolGuard ships as two things at once:
 - **Demo dashboard** — a terminal UI (`pnpm start`) that visualises the running stack for judges and ops teams. It is the _window into_ the infrastructure, not the product itself.
 
 **Bounty:** Advanced Infrastructure Challenge — Build a Smart Transaction Stack (Superteam Nigeria)  
-**Docs:** [`PRD.md`](./PRD.md) · [`ARCHITECTURE.md`](./ARCHITECTURE.md) · [`AGENT.md`](./AGENT.md) · [`docs/`](./docs/)
+**Architecture Document (public URL):** [`ARCHITECTURE.md`](./ARCHITECTURE.md) — system components, data flow, failure taxonomy, AI agent responsibilities, commitment-level strategy, and ASCII diagrams  
+**Docs:** [`PRD.md`](./PRD.md) · [`ARCHITECTURE.md`](./ARCHITECTURE.md) · [`AGENT.md`](./AGENT.md)
 
 ---
 
@@ -31,23 +32,17 @@ SolGuard ships as two things at once:
 
 ## Architecture (overview)
 
-![SolGuard system architecture](./docs/images/solguard_docs_architecture.png)
-
-<details>
-<summary>ASCII diagram</summary>
-
 ```
-Yellowstone gRPC ─▶ Stream Manager ─▶ ┬─▶ Congestion Oracle ─┐
- (reconnect/replay/dedupe/backpressure)├─▶ Leader Detector    ├─▶ AI Agent ─▶ Bundle Builder ─▶ Jito Block Engine
-                                        └─▶ Lifecycle Tracker ─┘   (guardrail)   (dynamic tip)
-                                                                        │
+Yellowstone gRPC ─▶ Stream Manager ─▶ ┬─▶ Congestion Oracle ──┐
+ (reconnect/replay/dedupe/backpressure)├─▶ Leader Detector      ├─▶ AI Agent ─▶ Bundle Builder ─▶ Jito Block Engine
+                                        └─▶ Lifecycle Tracker ──┘  (guardrail)   (dynamic tip)
+                                                                          │
                                                Decision Ledger + Lifecycle Log (append-only JSONL)
-                                                                        │
+                                                                          │
                                           SolGuard SDK / HTTP API (src/sdk, src/server.ts)
 ```
-</details>
 
-Full detail + interactive diagrams: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+Full detail (components, data flow, failure taxonomy, commitment strategy): [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ---
 
@@ -152,7 +147,21 @@ Tracked phase-by-phase in [`TASK.md`](./TASK.md). All core phases complete and v
 - **Lifecycle** — 4-stage tracker (processed → confirmed → finalized), measured on-chain
 - **AI Agent** — DeepSeek / Claude retry decisions, strict-JSON guardrail, decision ledger
 - **API** — `POST /submit`, `GET /health`, WebSocket + SSE bridge for live dashboard
-- **Frontend** — React dashboard with Yellowstone stream feed, live mode, bundle pipeline
+
+---
+
+## Lifecycle Log
+
+The stack records every bundle submission to append-only JSONL files in `logs/`:
+
+| File | Contents |
+|---|---|
+| `logs/lifecycle.jsonl` | One JSON object per bundle: `bundle_id`, `signatures`, `tip_lamports`, `stages` (slot + timestamp for submitted / processed / confirmed / finalized), `deltas_ms`, `failure` classification, `confirmed_via` |
+| `logs/decisions.jsonl` | One JSON object per AI agent decision: input context, decision (retry/hold/abort), confidence, diagnosis, params |
+
+**Verification:** All `bundle_id` and `signatures` fields from real mainnet runs (slot range 427,224,198 – 427,280,xxx) can be looked up on [Solscan](https://solscan.io) or via the [Jito bundle explorer](https://explorer.jito.wtf). Each entry includes the `tip_account` (one of the 8 official Jito tip addresses) and the Jito regional block-engine URL used.
+
+`confirmed_via: "stream"` entries prove that confirmation came from the Yellowstone tx subscription, not RPC polling alone.
 
 ---
 

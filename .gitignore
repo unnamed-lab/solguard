@@ -11,8 +11,7 @@ dist/
 wallet*.json
 keypair*.json
 
-# runtime logs (append-only ledgers are generated, not committed)
-logs/*.jsonl
+# runtime state
 state/
 
 # misc
