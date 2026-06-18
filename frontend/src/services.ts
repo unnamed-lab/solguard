@@ -1,7 +1,79 @@
-import type { Bundle, AgentDecision, TipFloorSnapshot, AgentDecisionParams } from './types';
+import type { Bundle, AgentDecision, TipFloorSnapshot, AgentDecisionParams, StreamEvent } from './types';
 
 // Deterministic mock addresses and data generator helpers
 import { useSolGuardStore } from './store';
+
+let _streamEventCounter = 0;
+function nextEventId(prefix: string): string {
+  return `${prefix}_${++_streamEventCounter}`;
+}
+
+const WALLET_SHORT = '3g3p…Q1BT';
+const FAKE_TX_PREFIXES = ['4fZk', 'mNpQ', '7rXB', 'bHJw', 'xKL2', 'pQ9R', 'aZvT', 'nBmW'];
+
+function pushSlotEvents(slot: number) {
+  const store = useSolGuardStore.getState();
+
+  // processed — every slot
+  store.pushStreamEvent({
+    id: nextEventId('proc'),
+    type: 'slot_processed',
+    slot,
+    ts: Date.now(),
+    label: 'PROCESSED',
+    detail: `+${380 + Math.floor(Math.random() * 60)}ms`,
+  });
+
+  // confirmed — lag of ~4 slots (emit for slot-4 on every 4th tick)
+  if (slot % 4 === 0) {
+    store.pushStreamEvent({
+      id: nextEventId('conf'),
+      type: 'slot_confirmed',
+      slot: slot - 4,
+      ts: Date.now(),
+      label: 'CONFIRMED',
+      detail: `+${420 + Math.floor(Math.random() * 80)}ms`,
+    });
+  }
+
+  // finalized — lag of ~32 slots (every 8th tick)
+  if (slot % 8 === 0) {
+    store.pushStreamEvent({
+      id: nextEventId('fin'),
+      type: 'slot_finalized',
+      slot: slot - 32,
+      ts: Date.now(),
+      label: 'FINALIZED',
+    });
+  }
+
+  // jito leader window — every 12 slots
+  if (slot % 12 === 0) {
+    store.pushStreamEvent({
+      id: nextEventId('jito'),
+      type: 'jito_window',
+      slot,
+      ts: Date.now(),
+      label: 'JITO WINDOW',
+      detail: `slots ${slot}–${slot + 3}`,
+      highlight: true,
+    });
+  }
+
+  // random tx event — ~8% chance per tick
+  if (Math.random() < 0.08) {
+    const pfx = FAKE_TX_PREFIXES[Math.floor(Math.random() * FAKE_TX_PREFIXES.length)]!;
+    store.pushStreamEvent({
+      id: nextEventId('tx'),
+      type: 'tx_seen',
+      slot,
+      ts: Date.now(),
+      label: 'TX SEEN',
+      detail: `${pfx}… acct ${WALLET_SHORT}`,
+      highlight: true,
+    });
+  }
+}
 
 const JITO_TIP_ACCOUNTS = [
   '96gYZGLnJYVFihjz5EPg5Q8pD8krrG1685mYdBt9Q7tb',
@@ -57,10 +129,13 @@ export function startSimulation() {
     const jitoLeaderSlot = isJitoWindowActive ? nextSlot + countdown : nextSlot + 12 - (nextSlot % 12);
     
     store.updateNetworkHealth(
-      parseFloat(newSkip.toFixed(2)), 
-      newPc, 
+      parseFloat(newSkip.toFixed(2)),
+      newPc,
       jitoLeaderSlot
     );
+
+    // Push Yellowstone stream events for this slot tick
+    pushSlotEvents(nextSlot);
 
     // Tip Floor drift
     const tfDrift = (Math.random() - 0.5) * 2000;
@@ -365,6 +440,7 @@ export function connectToLiveBridge(url: string) {
   store.setLiveMode(true);
   store.clearBundles();
   store.clearDecisions();
+  store.clearStreamEvents();
 
   // 1. WebSocket for Telemetry updates
   const wsUrl = url.startsWith('http') ? url.replace(/^http/, 'ws') : url;
@@ -375,10 +451,27 @@ export function connectToLiveBridge(url: string) {
       const data = JSON.parse(event.data);
       if (data.type === 'slot_update' && data.slot) {
         store.setSlot(data.slot);
+        // Surface each live slot_update as a stream event
+        store.pushStreamEvent({
+          id: nextEventId('live_proc'),
+          type: 'slot_processed',
+          slot: data.slot,
+          ts: Date.now(),
+          label: 'PROCESSED',
+          detail: data.commitment === 'confirmed' ? 'confirmed' : data.commitment === 'finalized' ? 'finalized' : undefined,
+        });
       } else if (data.type === 'network_update') {
         store.updateNetworkHealth(data.skipRate, data.pcDelta, data.jitoLeaderSlot);
       } else if (data.type === 'tip_update' && data.tipFloor) {
         store.setTipFloor(data.tipFloor);
+        store.pushStreamEvent({
+          id: nextEventId('tip'),
+          type: 'rpc_fallback',
+          slot: store.slot,
+          ts: Date.now(),
+          label: 'TIP FLOOR',
+          detail: `p50 ${data.tipFloor.p50.toLocaleString()} lmp`,
+        });
       }
     } catch (err) {
       console.error('Error parsing live WS frame', err);

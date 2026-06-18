@@ -52,6 +52,26 @@ export interface AgentDecisionParams {
   max_blockhash_age_slots: number;
 }
 
+export type StreamEventType =
+  | 'slot_processed'
+  | 'slot_confirmed'
+  | 'slot_finalized'
+  | 'tx_seen'
+  | 'jito_window'
+  | 'rpc_fallback'
+  | 'bundle_submitted'
+  | 'bundle_landed';
+
+export interface StreamEvent {
+  id: string;
+  type: StreamEventType;
+  slot: number;
+  ts: number;
+  label: string;
+  detail?: string;
+  highlight?: boolean;
+}
+
 export interface AgentDecision {
   ts: string;
   trigger: 'real_failure' | 'injected_fault';

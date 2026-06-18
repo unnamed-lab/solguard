@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Bundle, TipFloorSnapshot, AgentDecision } from './types';
+import type { Bundle, TipFloorSnapshot, AgentDecision, StreamEvent } from './types';
 
 interface SolGuardState {
   // Mode selection
@@ -46,15 +46,20 @@ interface SolGuardState {
   addDecision: (decision: AgentDecision) => void;
   updateDecisionOutcome: (bundleId: string, outcome: string) => void;
   clearDecisions: () => void;
+
+  // Yellowstone Stream Feed
+  streamEvents: StreamEvent[];
+  pushStreamEvent: (event: StreamEvent) => void;
+  clearStreamEvents: () => void;
 }
 
 const initialTipFloor: TipFloorSnapshot = {
-  p25: 42000,
-  p50: 87500,
-  p75: 195000,
-  p95: 380000,
-  p99: 620000,
-  ema: 110200,
+  p25: 1200,
+  p50: 5000,
+  p75: 18000,
+  p95: 62000,
+  p99: 150000,
+  ema: 8400,
   fetchedAt: Date.now(),
 };
 
@@ -64,7 +69,7 @@ export const useSolGuardStore = create<SolGuardState>((set, get) => ({
   setLiveMode: (isLive) => set({ isLiveMode: isLive }),
 
   // Network Telemetry
-  slot: 320492100,
+  slot: 427200000,
   skipRate: 2.3,
   pcDelta: 385,
   skipHistory: Array.from({ length: 24 }, () => 1.5 + Math.random() * 2),
@@ -204,4 +209,11 @@ export const useSolGuardStore = create<SolGuardState>((set, get) => ({
     return { decisions: updated };
   }),
   clearDecisions: () => set({ decisions: [], totalDecisions: 0 }),
+
+  // Yellowstone Stream Feed
+  streamEvents: [],
+  pushStreamEvent: (event) => set((state) => ({
+    streamEvents: [event, ...state.streamEvents.slice(0, 79)],
+  })),
+  clearStreamEvents: () => set({ streamEvents: [] }),
 }));

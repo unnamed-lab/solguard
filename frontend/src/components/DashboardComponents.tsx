@@ -1,30 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSolGuardStore } from '../store';
-import { 
-  shortenSignature, 
-  formatSlot, 
-  formatMs, 
+import type { StreamEvent } from '../types';
+import {
+  shortenSignature,
+  formatSlot,
+  formatMs,
   formatTime,
   formatNumber
 } from '../utils';
-import { 
-  simulateFailureScenario, 
-  connectToLiveBridge, 
+import {
+  simulateFailureScenario,
+  connectToLiveBridge,
   disconnectFromLiveBridge,
   startSimulation
 } from '../services';
-import { 
-  Activity, 
-  ShieldAlert, 
-  CheckCircle2, 
-  Clock, 
-  TrendingUp, 
-  Zap, 
-  Cpu, 
+import {
+  Activity,
+  ShieldAlert,
+  CheckCircle2,
+  Clock,
+  TrendingUp,
+  Zap,
+  Cpu,
   Terminal,
   FileJson,
   Wifi,
-  WifiOff
+  WifiOff,
+  Radio
 } from 'lucide-react';
 
 // ==========================================
@@ -74,7 +76,7 @@ export const Header: React.FC = () => {
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
           <span className="text-slate-400">Solana Network:</span>
           <span className="text-slate-200 font-mono">
-            {new URLSearchParams(window.location.search).get('cluster') || 'devnet'}
+            {new URLSearchParams(window.location.search).get('cluster') || 'mainnet-beta'}
           </span>
         </div>
 
@@ -142,7 +144,142 @@ export const Header: React.FC = () => {
 };
 
 // ==========================================
-// 2. METRIC CARDS
+// 2. YELLOWSTONE STREAM FEED PANEL
+// ==========================================
+function eventIcon(type: StreamEvent['type']): string {
+  switch (type) {
+    case 'slot_processed': return '→';
+    case 'slot_confirmed': return '✓';
+    case 'slot_finalized': return '◆';
+    case 'tx_seen':        return '●';
+    case 'jito_window':    return '⚡';
+    case 'rpc_fallback':   return '↻';
+    case 'bundle_submitted': return '▲';
+    case 'bundle_landed':  return '✓';
+    default: return '·';
+  }
+}
+
+function eventColor(type: StreamEvent['type']): string {
+  switch (type) {
+    case 'slot_processed':  return 'text-slate-400';
+    case 'slot_confirmed':  return 'text-blue-400';
+    case 'slot_finalized':  return 'text-emerald-400';
+    case 'tx_seen':         return 'text-purple-400';
+    case 'jito_window':     return 'text-amber-400';
+    case 'rpc_fallback':    return 'text-orange-400';
+    case 'bundle_submitted': return 'text-purple-300';
+    case 'bundle_landed':   return 'text-emerald-300';
+    default: return 'text-slate-500';
+  }
+}
+
+export const StreamFeedPanel: React.FC = () => {
+  const { streamEvents, isLiveMode, slot } = useSolGuardStore();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [paused, setPaused] = useState(false);
+
+  // Auto-scroll to top on new events unless user has scrolled down
+  useEffect(() => {
+    if (!paused && scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+    }
+  }, [streamEvents.length, paused]);
+
+  const displayEvents = streamEvents.slice(0, 40);
+  const eventsPerSec = isLiveMode ? '~2.5' : '2.5';
+
+  return (
+    <div className="glass-panel mx-6 mt-6 rounded-2xl overflow-hidden border border-slate-800/60">
+      {/* Header bar */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-800/80 bg-slate-950/40">
+        <div className="flex items-center gap-2.5">
+          <Radio className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
+          <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">
+            Yellowstone gRPC Stream
+          </span>
+          <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+            isLiveMode
+              ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+              : 'bg-slate-800 border-slate-700 text-slate-500'
+          }`}>
+            {isLiveMode ? 'LIVE' : 'SIM'}
+          </span>
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="text-[10px] text-slate-500 font-mono">
+            slot <span className="text-slate-300">{slot.toLocaleString()}</span>
+          </span>
+          <span className="text-[10px] text-slate-500 font-mono">
+            {eventsPerSec} slots/s
+          </span>
+          <button
+            onClick={() => setPaused((p) => !p)}
+            className={`text-[9px] font-mono px-2 py-0.5 rounded border transition-colors ${
+              paused
+                ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
+                : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            {paused ? 'RESUME' : 'PAUSE'}
+          </button>
+        </div>
+      </div>
+
+      {/* Event rows */}
+      <div
+        ref={scrollRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          setPaused(el.scrollTop > 20);
+        }}
+        className="overflow-y-auto max-h-[148px] bg-slate-950/60 font-mono text-[11px]"
+      >
+        {displayEvents.length === 0 ? (
+          <div className="flex items-center justify-center h-24 text-slate-600 text-[11px]">
+            <Clock className="w-3.5 h-3.5 mr-2 animate-pulse text-purple-500/40" />
+            Waiting for stream events…
+          </div>
+        ) : (
+          displayEvents.map((ev) => (
+            <div
+              key={ev.id}
+              className={`flex items-center gap-3 px-4 py-[4px] border-b border-slate-900/60 last:border-0 transition-colors ${
+                ev.highlight ? 'bg-amber-500/5' : 'hover:bg-slate-900/40'
+              }`}
+            >
+              {/* Icon */}
+              <span className={`w-4 text-center flex-shrink-0 ${eventColor(ev.type)}`}>
+                {eventIcon(ev.type)}
+              </span>
+              {/* Event type label */}
+              <span className={`w-20 flex-shrink-0 font-bold ${eventColor(ev.type)}`}>
+                {ev.label}
+              </span>
+              {/* Slot */}
+              <span className="text-slate-500 flex-shrink-0">
+                [<span className="text-slate-300">{ev.slot.toLocaleString()}</span>]
+              </span>
+              {/* Detail */}
+              {ev.detail && (
+                <span className="text-slate-500 truncate">
+                  {ev.detail}
+                </span>
+              )}
+              {/* Age */}
+              <span className="ml-auto flex-shrink-0 text-slate-700 text-[9px]">
+                {Math.floor((Date.now() - ev.ts) / 1000)}s ago
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ==========================================
+// 3. METRIC CARDS
 // ==========================================
 export const MetricCards: React.FC = () => {
   const { slot, skipRate, pcDelta, landedCount } = useSolGuardStore();
@@ -225,7 +362,7 @@ export const MetricCards: React.FC = () => {
 };
 
 // ==========================================
-// 3. LEFT PANEL: NETWORK HEALTH + TIP INTELLIGENCE
+// 4. LEFT PANEL: NETWORK HEALTH + TIP INTELLIGENCE
 // ==========================================
 export const LeftPanel: React.FC = () => {
   const { skipHistory, jitoLeaderSlot, slot } = useSolGuardStore();
