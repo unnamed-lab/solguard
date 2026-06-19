@@ -122,7 +122,7 @@ export function startServer(solguard: SolGuard, port = PORT) {
           }
           log.info("Received /submit request");
           const result = await solguard.submit(transaction, { urgency, customTipLamports, simulateFault, remainingTipBudgetLamports });
-          res.writeHead(result.landed ? 200 : 422).end(JSON.stringify(result));
+          res.writeHead(200).end(JSON.stringify(result));
         } catch (err) {
           log.error("Error in /submit", { err: String(err) });
           res.writeHead(500).end(JSON.stringify({ error: `Internal server error: ${String(err)}` }));
