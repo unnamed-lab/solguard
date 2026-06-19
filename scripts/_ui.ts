@@ -2,6 +2,20 @@
  * Terminal UI helpers for test harnesses — spinner + AI reasoning box.
  * Used by test-agent-mainnet.ts and test-trading-scenarios.ts.
  */
+import {
+  Connection,
+  Keypair,
+  Transaction,
+  VersionedTransaction,
+  TransactionInstruction,
+  TransactionMessage,
+} from "@solana/web3.js";
+import { SolGuard, type SolGuardResult } from "../src/sdk/solguard.js";
+import { disableConsoleLogging } from "../src/util/log.js";
+
+// Disable console logs in test runners to keep CLI output clean
+disableConsoleLogging();
+
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const HIDE_CURSOR = "\x1b[?25l";
@@ -160,4 +174,114 @@ export function summaryRow(id: string, scenario: string, action: string, conf: s
     : action === "hold"  ? "yellow"
     : "dim";
   console.log(`  ${c("dim", id.padEnd(4))}${scenario.padEnd(30)}${c(ac, action.padEnd(9))} ${conf}`);
+}
+
+/**
+ * Shared transaction submission helper.
+ * Queries local API server; if running, POSTs transaction there.
+ * Otherwise falls back to standalone SolGuard SDK run.
+ */
+export async function submitTransaction(
+  txInput: VersionedTransaction | Transaction | TransactionInstruction[],
+  connection: Connection,
+  wallet: Keypair,
+  opts: {
+    urgency?: "normal" | "high";
+    customTipLamports?: number;
+    confirmTimeoutMs?: number;
+    simulateFault?: "blockhash_expired" | "fee_too_low" | "compute_exceeded" | "leader_skip" | "slippage_exceeded";
+    remainingTipBudgetLamports?: number;
+  } = {}
+): Promise<SolGuardResult> {
+  // Check if API server is running on port 3000
+  let isApiRunning = false;
+  try {
+    const res = await fetch("http://localhost:3000/health");
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === "healthy") {
+        isApiRunning = true;
+      }
+    }
+  } catch {
+    // API server not running
+  }
+
+  if (isApiRunning) {
+    // Build and sign transaction locally before sending to API
+    let txToSend: VersionedTransaction | Transaction;
+    if (Array.isArray(txInput)) {
+      const bh = await connection.getLatestBlockhash("confirmed");
+      const msg = new TransactionMessage({
+        payerKey: wallet.publicKey,
+        recentBlockhash: bh.blockhash,
+        instructions: txInput,
+      }).compileToV0Message();
+      const tx = new VersionedTransaction(msg);
+      tx.sign([wallet]);
+      txToSend = tx;
+    } else {
+      txToSend = txInput;
+      const hasBlockhash = txToSend instanceof VersionedTransaction
+        ? txToSend.message.recentBlockhash
+        : txToSend.recentBlockhash;
+      if (!hasBlockhash) {
+        const bh = await connection.getLatestBlockhash("confirmed");
+        if (txToSend instanceof VersionedTransaction) {
+          txToSend.message.recentBlockhash = bh.blockhash;
+        } else {
+          txToSend.recentBlockhash = bh.blockhash;
+        }
+      }
+      const hasSig = txToSend instanceof VersionedTransaction
+        ? txToSend.signatures.some(s => s.reduce((acc, v) => acc + v, 0) > 0)
+        : txToSend.signature;
+      if (!hasSig) {
+        if (txToSend instanceof VersionedTransaction) {
+          txToSend.sign([wallet]);
+        } else {
+          txToSend.sign(wallet);
+        }
+      }
+    }
+
+    const txBase64 = Buffer.from(txToSend.serialize()).toString("base64");
+    const response = await fetch("http://localhost:3000/submit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        transaction: txBase64,
+        urgency: opts.urgency ?? "high",
+        customTipLamports: opts.customTipLamports,
+        simulateFault: opts.simulateFault,
+        remainingTipBudgetLamports: opts.remainingTipBudgetLamports,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`API returned HTTP ${response.status}: ${errText}`);
+    }
+
+    return response.json() as Promise<SolGuardResult>;
+  } else {
+    // Fall back to local standalone SDK run
+    const guard = new SolGuard({
+      wallet,
+      connection,
+      submit: true,
+      confirmTimeoutMs: opts.confirmTimeoutMs ?? 45_000,
+    });
+    await guard.start();
+    try {
+      return await guard.submit(txInput, {
+        urgency: opts.urgency,
+        customTipLamports: opts.customTipLamports,
+        simulateFault: opts.simulateFault,
+        remainingTipBudgetLamports: opts.remainingTipBudgetLamports,
+      });
+    } finally {
+      await guard.stop();
+    }
+  }
 }

@@ -46,6 +46,11 @@ export function disableFileLogging(): void {
   }
 }
 
+let consoleLoggingDisabled = false;
+export function disableConsoleLogging(): void {
+  consoleLoggingDisabled = true;
+}
+
 function emit(level: Level, scope: string, msg: string, fields?: Record<string, unknown>) {
   if (order[level] < threshold) return;
   const entry: LogEntry = {
@@ -71,6 +76,8 @@ function emit(level: Level, scope: string, msg: string, fields?: Record<string, 
       // Fallback
     }
   }
+
+  if (consoleLoggingDisabled) return;
 
   const out = level === "error" || level === "warn" ? process.stderr : process.stdout;
   out.write(str);

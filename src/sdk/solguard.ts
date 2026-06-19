@@ -48,6 +48,8 @@ export interface SolGuardConfig {
 export interface SolGuardSubmitOptions {
   urgency?: "normal" | "high";
   customTipLamports?: number;
+  simulateFault?: "blockhash_expired" | "fee_too_low" | "compute_exceeded" | "leader_skip" | "slippage_exceeded";
+  remainingTipBudgetLamports?: number;
 }
 
 export interface SolGuardResult {
@@ -368,7 +370,9 @@ export class SolGuard {
     );
 
     // Wait for confirmation on Yellowstone stream
-    const landed = await this.awaitConfirmation(result.bundleId);
+    const landed = (opts.simulateFault && ctx.attempt === 1)
+      ? false
+      : await this.awaitConfirmation(result.bundleId);
     const lifecycleEntry = this.lifecycle!.get(result.bundleId) || {
       bundle_id: result.bundleId,
       signatures: result.signatures,
@@ -392,9 +396,13 @@ export class SolGuard {
     }
 
     // Handle failure path
+    const failure = (opts.simulateFault && ctx.attempt === 1)
+      ? this.getSimulatedFailure(opts.simulateFault, result.bundleId, currentSlot, targetLeaderSlot, tipLamports)
+      : this.classifyTimeout(result.bundleId, currentSlot, targetLeaderSlot, tipLamports, tf.p50, congestion);
+
+    this.lifecycle!.fail(result.bundleId, failure);
+
     if (ctx.attempt >= this.maxAttempts) {
-      const failure = this.classifyTimeout(result.bundleId, currentSlot, targetLeaderSlot, tipLamports, tf.p50, congestion);
-      this.lifecycle!.fail(result.bundleId, failure);
       return {
         bundleId: result.bundleId,
         landed: false,
@@ -402,9 +410,6 @@ export class SolGuard {
         error: `Max attempts (${this.maxAttempts}) exceeded without landing. Last failure: ${failure.type}`,
       };
     }
-
-    const failure = this.classifyTimeout(result.bundleId, currentSlot, targetLeaderSlot, tipLamports, tf.p50, congestion);
-    this.lifecycle!.fail(result.bundleId, failure);
 
     // Prepare AI agent context
     const agentInput: AgentInput = {
@@ -424,6 +429,9 @@ export class SolGuard {
         tip_floor: tf,
         next_jito_leader_slot: win?.nextJitoLeaderSlot ?? targetLeaderSlot,
         slots_until_jito_leader: win?.slotsUntilJitoLeader ?? 0,
+        remaining_tip_budget_lamports: opts.remainingTipBudgetLamports !== undefined
+          ? opts.remainingTipBudgetLamports
+          : undefined,
       },
       history: ctx.history,
     };
@@ -467,14 +475,16 @@ export class SolGuard {
 
     // action === "retry"
     if (decision.params.refresh_blockhash && isPresigned) {
-      const abortMsg = "AI Agent requested refresh_blockhash for a pre-signed transaction. Re-signing requires the private key.";
-      decisionLedger().updateOutcome(ledgerTs, result.bundleId, `aborted — ${abortMsg}`);
-      return {
-        bundleId: result.bundleId,
-        landed: false,
-        lifecycle: this.lifecycle!.get(result.bundleId) || lifecycleEntry,
-        error: abortMsg,
-      };
+      if (!this.canReSign(parsed as VersionedTransaction | Transaction)) {
+        const abortMsg = "AI Agent requested refresh_blockhash for a pre-signed transaction. Re-signing requires the private key.";
+        decisionLedger().updateOutcome(ledgerTs, result.bundleId, `aborted — ${abortMsg}`);
+        return {
+          bundleId: result.bundleId,
+          landed: false,
+          lifecycle: this.lifecycle!.get(result.bundleId) || lifecycleEntry,
+          error: abortMsg,
+        };
+      }
     }
 
     // Execute retry
@@ -491,6 +501,99 @@ export class SolGuard {
     return outcome;
   }
 
+  private canReSign(parsed: VersionedTransaction | Transaction): boolean {
+    if (!this.sdkWallet) return false;
+    if (parsed instanceof VersionedTransaction) {
+      const numSigners = parsed.message.header.numRequiredSignatures;
+      if (numSigners === 1) {
+        const signerKey = parsed.message.staticAccountKeys[0];
+        return !!(signerKey && signerKey.equals(this.sdkWallet.publicKey));
+      }
+      return false;
+    } else if (parsed instanceof Transaction) {
+      const signers = parsed.signatures.map((s) => s.publicKey);
+      if (signers.length === 1 && signers[0]) {
+        return signers[0].equals(this.sdkWallet.publicKey);
+      }
+      return false;
+    }
+    return false;
+  }
+
+  private getSimulatedFailure(
+    faultType: string,
+    bundleId: string,
+    currentSlot: number,
+    targetLeaderSlot: number,
+    tipLamports: number
+  ): FailureRecord {
+    const ts = new Date().toISOString();
+    const detectedAtSlot = currentSlot;
+    switch (faultType) {
+      case "blockhash_expired":
+        return {
+          type: "blockhash_expired",
+          detectedAtSlot,
+          ts,
+          evidence: {
+            reason: "Blockhash expired: transaction was not processed before the last valid block height",
+            lastValidBlockHeight: currentSlot - 10,
+            currentBlockHeight: currentSlot + 5,
+          },
+        };
+      case "fee_too_low":
+        return {
+          type: "fee_too_low",
+          detectedAtSlot,
+          ts,
+          evidence: {
+            reason: "Jito bundle dropped due to insufficient tip auction bid compared to competitive floors",
+            tipLamports,
+            floorP50: tipLamports * 5,
+          },
+        };
+      case "compute_exceeded":
+        return {
+          type: "compute_exceeded",
+          detectedAtSlot,
+          ts,
+          evidence: {
+            reason: "Transaction execution exceeded maximum compute units allocated",
+            simulationError: "Exceeded compute budget limit of 1400000 CUs",
+          },
+        };
+      case "leader_skip":
+        return {
+          type: "bundle_dropped_leader_skip",
+          detectedAtSlot,
+          ts,
+          evidence: {
+            reason: "Leader skipped scheduled slots",
+            leaderSlot: targetLeaderSlot,
+          },
+        };
+      case "slippage_exceeded":
+        return {
+          type: "simulation_failed",
+          detectedAtSlot,
+          ts,
+          evidence: {
+            reason: "Slippage tolerance exceeded",
+            simulationError: "custom program error: 0x1772 (SlippageToleranceExceeded)",
+          },
+        };
+      default:
+        return {
+          type: "simulation_failed",
+          detectedAtSlot,
+          ts,
+          evidence: {
+            reason: "Unknown simulated fault",
+          },
+        };
+    }
+  }
+
   private async runOneRetry(
     ctx: AttemptCtx,
     parsed: VersionedTransaction | Transaction | TransactionInstruction[],
@@ -500,10 +603,25 @@ export class SolGuard {
     newTipLamports: number
   ): Promise<SolGuardResult> {
     let nextParsed = parsed;
-    if (refreshBlockhash && !isPresigned) {
-      log.info("Refreshing blockhash for instructions retry...");
-      // Re-sign occurs during building phase when we call buildBundleFromInstructions with no blockhash (will fetch fresh)
-      nextParsed = parsed;
+    if (refreshBlockhash) {
+      if (!isPresigned) {
+        log.info("Refreshing blockhash for instructions retry...");
+        // Re-sign occurs during building phase when we call buildBundleFromInstructions with no blockhash (will fetch fresh)
+        nextParsed = parsed;
+      } else {
+        log.info("Refreshing blockhash and re-signing pre-signed transaction...");
+        const bh = await fetchConfirmedBlockhash();
+        if (parsed instanceof VersionedTransaction) {
+          (parsed.message as any).recentBlockhash = bh.blockhash;
+          parsed.signatures = parsed.signatures.map(() => new Uint8Array(64));
+          parsed.sign([this.sdkWallet]);
+        } else if (parsed instanceof Transaction) {
+          parsed.recentBlockhash = bh.blockhash;
+          parsed.signatures = [];
+          parsed.sign(this.sdkWallet);
+        }
+        nextParsed = parsed;
+      }
     }
     return this.runOneSubmitAttempt(ctx, nextParsed, isPresigned, opts, { newTipLamports });
   }
@@ -671,23 +789,47 @@ export class SolGuard {
 
   private async awaitConfirmation(bundleId: string): Promise<boolean> {
     const deadline = Date.now() + this.confirmTimeoutMs;
+    const entry = this.lifecycle!.get(bundleId);
+    const sigs = entry?.signatures ?? [];
+    let lastPollAt = 0;
+
     while (Date.now() < deadline) {
-      const entry = this.lifecycle!.get(bundleId);
-      if (entry?.stages.confirmed) return true;
-      if (entry?.failure) return false;
+      const current = this.lifecycle!.get(bundleId);
+      if (current?.stages.confirmed) return true;
+      if (current?.failure) return false;
+
+      const now = Date.now();
+      if (now - lastPollAt >= 3_000) {
+        lastPollAt = now;
+
+        // 1. Check Jito Bundle Status API
+        try {
+          const statuses = await this.jito.getBundleStatuses([bundleId]);
+          const s = statuses.find((x) => x.bundle_id === bundleId);
+          if (s && (s.confirmation_status === "confirmed" || s.confirmation_status === "finalized")) {
+            log.info("Reconciled bundle confirmation via Jito API", { bundleId, slot: s.slot });
+            this.lifecycle!.reconcile(bundleId, s.confirmation_status, s.slot);
+            return true;
+          }
+        } catch { /* ignore */ }
+
+        // 2. Check Solana RPC Signature Statuses (for RPC TPU fallbacks)
+        if (sigs.length > 0) {
+          try {
+            const resp = await this.sdkConnection.getSignatureStatuses(sigs, { searchTransactionHistory: true });
+            if (resp?.value.some((s) => s && (s.confirmationStatus === "confirmed" || s.confirmationStatus === "finalized"))) {
+              const slot = resp.value.find((s) => s)?.slot ?? 0;
+              log.info("Reconciled bundle confirmation via RPC", { bundleId, slot });
+              this.lifecycle!.reconcile(bundleId, "confirmed", slot);
+              return true;
+            }
+          } catch { /* ignore */ }
+        }
+      }
+
       await this.sleep(500);
     }
-    // Reconciliation fallback
-    try {
-      const statuses = await this.jito.getBundleStatuses([bundleId]);
-      const s = statuses.find((x) => x.bundle_id === bundleId);
-      if (s && (s.confirmation_status === "confirmed" || s.confirmation_status === "finalized")) {
-        this.lifecycle!.reconcile(bundleId, s.confirmation_status, s.slot);
-        return true;
-      }
-    } catch (err) {
-      log.debug("reconciliation failed in SDK await", { err: String(err) });
-    }
+
     return false;
   }
 

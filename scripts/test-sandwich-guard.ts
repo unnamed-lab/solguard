@@ -34,9 +34,8 @@ import { VersionedTransaction } from "@solana/web3.js";
 import { CongestionOracle } from "../src/network/congestion.js";
 import { tipFloorService } from "../src/tips/tipFloor.js";
 import { computeTip } from "../src/tips/model.js";
-import { SolGuard } from "../src/sdk/solguard.js";
 import { connection, wallet } from "../src/solana/connection.js";
-import { Col, c, scenarioBanner, delay } from "./_ui.js";
+import { Col, c, scenarioBanner, delay, submitTransaction } from "./_ui.js";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const WSOL_MINT    = "So11111111111111111111111111111111111111112";
@@ -256,11 +255,12 @@ async function main() {
       warn(`Swap tx build failed: ${e.message}`);
     }
 
-    if (swapTx) {
-      const guard = new SolGuard({ wallet: payer, connection: conn, submit: true, confirmTimeoutMs: 35_000 });
-      try {
-        await guard.start();
-        const result = await guard.submit(swapTx as any, { urgency: "high", customTipLamports: tip.lamports });
+      if (swapTx) {
+        const result = await submitTransaction(swapTx as any, conn, payer, {
+          urgency: "high",
+          customTipLamports: tip.lamports,
+          confirmTimeoutMs: 35_000,
+        });
         if (result.landed) {
           ok(`Bundle confirmed: ${result.signature?.substring(0, 28)}…`);
           ok(`Explorer: https://solscan.io/tx/${result.signature}`);
@@ -268,10 +268,7 @@ async function main() {
         } else {
           warn(`TX sent, awaiting on-chain confirmation: ${result.error ?? ""}`);
         }
-      } finally {
-        await guard.stop().catch(() => {});
       }
-    }
   } else {
     if (balance < MIN_BALANCE) {
       warn(`Balance ${(balance/1e9).toFixed(6)} SOL < 0.012 — submission skipped`);

@@ -113,7 +113,7 @@ export function startServer(solguard: SolGuard, port = PORT) {
             res.writeHead(400).end(JSON.stringify({ error: "Missing request body" }));
             return;
           }
-          const { transaction, urgency, customTipLamports } = JSON.parse(body);
+          const { transaction, urgency, customTipLamports, simulateFault, remainingTipBudgetLamports } = JSON.parse(body);
           if (!transaction) {
             res.writeHead(400).end(
               JSON.stringify({ error: "Missing required 'transaction' field (base64 or base58)" })
@@ -121,7 +121,7 @@ export function startServer(solguard: SolGuard, port = PORT) {
             return;
           }
           log.info("Received /submit request");
-          const result = await solguard.submit(transaction, { urgency, customTipLamports });
+          const result = await solguard.submit(transaction, { urgency, customTipLamports, simulateFault, remainingTipBudgetLamports });
           res.writeHead(result.landed ? 200 : 422).end(JSON.stringify(result));
         } catch (err) {
           log.error("Error in /submit", { err: String(err) });

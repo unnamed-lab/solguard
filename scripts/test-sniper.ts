@@ -32,9 +32,8 @@ import { CongestionOracle } from "../src/network/congestion.js";
 import { tipFloorService } from "../src/tips/tipFloor.js";
 import { computeTip } from "../src/tips/model.js";
 import { LeaderWindowDetector } from "../src/network/leader.js";
-import { SolGuard } from "../src/sdk/solguard.js";
 import { connection, wallet } from "../src/solana/connection.js";
-import { Spinner, Col, c, scenarioBanner, delay, summaryRow } from "./_ui.js";
+import { Spinner, Col, c, scenarioBanner, delay, summaryRow, submitTransaction } from "./_ui.js";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const WSOL_MINT    = "So11111111111111111111111111111111111111112";
@@ -157,37 +156,26 @@ async function runSniper(
 
   // Step 3: Submit via SolGuard (stream → tip → jito bundle → confirmation)
   info(`[T+${ms(Date.now() - r.detectTs).padStart(8)}]  Submitting to Jito (tip: ${tipLamports.toLocaleString()} lmp)…`);
-  const guard = new SolGuard({
-    wallet:           payer,
-    connection:       conn,
-    submit:           true,
-    confirmTimeoutMs: 30_000,
+  const submitSlot  = await conn.getSlot("confirmed");
+  r.submittedSlot   = submitSlot;
+  r.slotDelta       = submitSlot - event.detectedSlot;
+
+  const result = await submitTransaction(swapTx as any, conn, payer, {
+    urgency:           "high",
+    customTipLamports: tipLamports,
+    confirmTimeoutMs:  30_000,
   });
 
-  try {
-    await guard.start();
-    const submitSlot  = await conn.getSlot("confirmed");
-    r.submittedSlot   = submitSlot;
-    r.slotDelta       = submitSlot - event.detectedSlot;
+  r.submitTs  = Date.now();
+  r.landed    = result.landed;
+  r.sig       = result.signature ?? null;
+  r.confirmTs = result.landed ? Date.now() : null;
 
-    const result = await guard.submit(swapTx as any, {
-      urgency:           "high",
-      customTipLamports: tipLamports,
-    });
-
-    r.submitTs  = Date.now();
-    r.landed    = result.landed;
-    r.sig       = result.signature ?? null;
-    r.confirmTs = result.landed ? Date.now() : null;
-
-    info(`[T+${ms(r.submitTs - r.detectTs).padStart(8)}]  Bundle submitted (slot ${submitSlot.toLocaleString()})`);
-    if (result.landed) {
-      info(`[T+${ms((r.confirmTs ?? r.submitTs) - r.detectTs).padStart(8)}]  Confirmed on-chain`);
-    } else {
-      r.error = result.error ?? "timeout";
-    }
-  } finally {
-    await guard.stop().catch(() => {});
+  info(`[T+${ms(r.submitTs - r.detectTs).padStart(8)}]  Bundle submitted (slot ${submitSlot.toLocaleString()})`);
+  if (result.landed) {
+    info(`[T+${ms((r.confirmTs ?? r.submitTs) - r.detectTs).padStart(8)}]  Confirmed on-chain`);
+  } else {
+    r.error = result.error ?? "timeout";
   }
 
   return r;

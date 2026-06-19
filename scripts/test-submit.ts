@@ -17,7 +17,7 @@ import {
   VersionedTransaction,
 } from "@solana/web3.js";
 import bs58 from "bs58";
-import { SolGuard } from "../src/sdk/solguard.js";
+import { submitTransaction } from "./_ui.js";
 
 const RPC_URL = process.env.RPC_HTTP_URL;
 const SECRET_KEY_B58 = process.env.WALLET_SECRET_KEY;
@@ -120,57 +120,46 @@ async function main() {
   // p75 ≈ 9,747 lamports from live floor; we set 20,000 as a safe minimum
   const COMPETITIVE_TIP = 20_000;
 
-  const guard = new SolGuard({
-    wallet,
-    connection,
-    submit: true,
-    confirmTimeoutMs: 45_000, // 45s confirmation window
+  const result = await submitTransaction(txInput as any, connection, wallet, {
+    urgency: "high",
+    customTipLamports: COMPETITIVE_TIP,
+    confirmTimeoutMs: 45_000,
   });
 
-  try {
-    await guard.start();
-    const result = await guard.submit(txInput as any, {
-      urgency: "high",
-      customTipLamports: COMPETITIVE_TIP,
-    });
-
-    console.log("\n=== Result ===");
-    if (result.landed) {
-      console.log(`✓  LANDED`);
-      console.log(`   Bundle  : ${result.bundleId}`);
-      console.log(`   Sig     : ${result.signature}`);
-      console.log(`   Slot    : ${result.slot}`);
-      console.log(`   Explorer: https://solscan.io/tx/${result.signature}`);
-    } else {
-      console.log(`✗  DID NOT LAND`);
-      console.log(`   Bundle  : ${result.bundleId}`);
-      console.log(`   Error   : ${result.error}`);
-    }
-
-    const lc = result.lifecycle;
-    if (lc) {
-      console.log("\n=== Lifecycle ===");
-      for (const [stage, stamp] of Object.entries(lc.stages)) {
-        if (stamp) console.log(`   ${stage.padEnd(12)}: slot ${stamp.slot}  ${stamp.ts}`);
-      }
-      if (Object.keys(lc.deltas_ms).length) {
-        console.log("\n=== Timing Deltas ===");
-        for (const [k, v] of Object.entries(lc.deltas_ms)) {
-          if (v != null) console.log(`   ${k}: ${v} ms`);
-        }
-      }
-      if (lc.failure) {
-        console.log("\n=== Failure ===");
-        console.log(`   Type     : ${lc.failure.type}`);
-        console.log(`   Evidence : ${JSON.stringify(lc.failure.evidence)}`);
-      }
-    }
-
-    const newBal = await connection.getBalance(wallet.publicKey);
-    console.log(`\nWallet balance after: ${sol(newBal)} (Δ ${sol(newBal - balance)})`);
-  } finally {
-    await guard.stop();
+  console.log("\n=== Result ===");
+  if (result.landed) {
+    console.log(`✓  LANDED`);
+    console.log(`   Bundle  : ${result.bundleId}`);
+    console.log(`   Sig     : ${result.signature}`);
+    console.log(`   Slot    : ${result.slot}`);
+    console.log(`   Explorer: https://solscan.io/tx/${result.signature}`);
+  } else {
+    console.log(`✗  DID NOT LAND`);
+    console.log(`   Bundle  : ${result.bundleId}`);
+    console.log(`   Error   : ${result.error}`);
   }
+
+  const lc = result.lifecycle;
+  if (lc) {
+    console.log("\n=== Lifecycle ===");
+    for (const [stage, stamp] of Object.entries(lc.stages)) {
+      if (stamp) console.log(`   ${stage.padEnd(12)}: slot ${stamp.slot}  ${stamp.ts}`);
+    }
+    if (Object.keys(lc.deltas_ms).length) {
+      console.log("\n=== Timing Deltas ===");
+      for (const [k, v] of Object.entries(lc.deltas_ms)) {
+        if (v != null) console.log(`   ${k}: ${v} ms`);
+      }
+    }
+    if (lc.failure) {
+      console.log("\n=== Failure ===");
+      console.log(`   Type     : ${lc.failure.type}`);
+      console.log(`   Evidence : ${JSON.stringify(lc.failure.evidence)}`);
+    }
+  }
+
+  const newBal = await connection.getBalance(wallet.publicKey);
+  console.log(`\nWallet balance after: ${sol(newBal)} (Δ ${sol(newBal - balance)})`);
 }
 
 main().catch((err) => {
