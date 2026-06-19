@@ -1,47 +1,56 @@
 /**
  * SolGuard orchestrator (plan §3 `index.ts`).
  *
- * Phases 0–3 wired: the Stream Manager feeds the Congestion Oracle and the
- * Lifecycle Tracker; the Leader Window Detector is polled on an interval; the
- * Dashboard renders the live state. The bundle pipeline (builder/submitter/
- * status) and the AI agent (Phase 4) attach as consumers of these same parts.
+ * Runs the unified stack: instantiates and starts the SolGuard SDK (Yellowstone
+ * stream, oracle, leader detector, lifecycle tracker, AI agent) and starts the
+ * developer REST API server in the same process to avoid gRPC connection conflicts.
+ * Renders the terminal dashboard for live observability.
  */
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
-import { StreamManager } from "./stream/manager.js";
 import { walletPubkey } from "./solana/connection.js";
-import { CongestionOracle, type CongestionSnapshot } from "./network/congestion.js";
-import { LeaderWindowDetector, type LeaderWindow } from "./network/leader.js";
-import { LifecycleTracker } from "./lifecycle/tracker.js";
 import { Dashboard, type DashboardState, type AgentDecisionRow } from "./dashboard/ui.js";
-import { tipFloorService } from "./tips/tipFloor.js";
-import type { TipFloor } from "./tips/tipFloor.js";
+import { tipFloorService, type TipFloor } from "./tips/tipFloor.js";
+import type { LeaderWindow } from "./network/leader.js";
 import { computeTip } from "./tips/model.js";
 import { logger } from "./util/log.js";
+import { SolGuard } from "./sdk/solguard.js";
+import { startServer } from "./server.js";
+import { bridge } from "./events/bridge.js";
 
 export { SolGuard } from "./sdk/solguard.js";
 
 const log = logger("orchestrator");
+const PORT = Number(process.env.PORT || 3000);
 
 async function main() {
   const useDashboard = process.env.DASHBOARD !== "0";
   log.info("SolGuard starting", { phases: "0-3" });
 
-  const stream = new StreamManager();
-  const oracle = new CongestionOracle();
-  const leader = new LeaderWindowDetector();
-  const lifecycle = new LifecycleTracker();
+  // Instantiate unified SDK
+  const solguard = new SolGuard({ submit: true });
+  await solguard.start();
 
-  // follow our own signer's transactions for landing confirmation (FR-2)
+  const stream = solguard.getStream()!;
+  const oracle = solguard.getOracle()!;
+  const leader = solguard.getLeader()!;
+  const lifecycle = solguard.getLifecycle()!;
+
+  // Follow our own signer's transactions for landing confirmation (FR-2)
   const me = walletPubkey();
   if (me) stream.trackAccounts([me]);
 
-  await stream.start();
-
   const startedAt = Date.now();
-  const tipSvc = tipFloorService();
+  const tipSvc = solguard.getStream() ? solguard.getLifecycle() ? (solguard as any).tipFloor : null : null; 
+  // Wait, let's get the tipFloorService from tipFloorService() directly as it's a singleton!
+  // Yes, tipFloorService() returns the global singleton, so we can just use that.
+  const tipSvcInstance = (solguard as any).tipFloor || tipFloorService();
 
-  // poll the Jito leader window on a light cadence
+  // Start the HTTP API Server in the same process
+  const apiServer = startServer(solguard, PORT);
+  log.info("Unified API Server started.");
+
+  // Poll the Jito leader window on a light cadence
   let leaderWindow: LeaderWindow | undefined;
   const leaderTimer = setInterval(async () => {
     try {
@@ -51,18 +60,18 @@ async function main() {
     }
   }, 1500);
 
-  // poll the tip floor every 30 s
+  // Poll the tip floor every 30 s
   let lastTipFloor: TipFloor | undefined;
   let computedTipLamports: number | undefined;
   let computedTipPercentile: string | undefined;
   const tipTimer = setInterval(async () => {
     try {
-      lastTipFloor = await tipSvc.get();
-      // snapshot the tip we'd use right now, given current congestion
-      if (lastTipFloor && lastCongestion) {
+      lastTipFloor = await tipSvcInstance.get();
+      const snap = oracle.snapshot();
+      if (lastTipFloor && snap) {
         const td = computeTip({
           tipFloor: lastTipFloor,
-          congestionMultiplier: lastCongestion.congestionMultiplier,
+          congestionMultiplier: snap.congestionMultiplier,
           urgency: "normal",
         });
         computedTipLamports = td.lamports;
@@ -72,18 +81,31 @@ async function main() {
       log.debug("tip floor poll failed", { err: String(err) });
     }
   }, 30_000);
-  // warm-start: fetch immediately in the background
-  void tipSvc.get().then((tf) => { lastTipFloor = tf; }).catch(() => {});
+  // Warm-start tip floor fetch
+  void tipSvcInstance.get().then((tf: TipFloor) => { lastTipFloor = tf; }).catch(() => {});
 
-  // rolling 10-entry decision history for the dashboard
+  // Rolling 10-entry decision history for the dashboard
   const decisionHistory: AgentDecisionRow[] = [];
 
-  // dashboard
-  let lastCongestion: CongestionSnapshot | undefined;
+  // Listen to the bridge to capture agent decisions and update the dashboard history
+  bridge.on("decision_event", (data: any) => {
+    decisionHistory.push({
+      rootCause: data.rootCause,
+      action: data.action,
+      confidence: data.confidence,
+      diagnosis: data.diagnosis,
+      newTipLamports: data.newTipLamports,
+    });
+    if (decisionHistory.length > 10) {
+      decisionHistory.shift();
+    }
+  });
+
+  // Dashboard
   const dash = useDashboard
     ? new Dashboard((): DashboardState => ({
         stream: stream.metrics(),
-        congestion: lastCongestion,
+        congestion: oracle.snapshot(),
         leader: leaderWindow,
         tipFloor: lastTipFloor,
         computedTipLamports,
@@ -94,18 +116,20 @@ async function main() {
           stage: latestStage(e.stages),
           tipLamports: e.tip_lamports,
         })),
+        lastDecision: decisionHistory[decisionHistory.length - 1],
         decisionHistory: [...decisionHistory],
         startedAt,
       }))
     : undefined;
   dash?.start();
 
-  // fan out stream events
+  // Teardown logic
   const cleanup = async () => {
     clearInterval(leaderTimer);
     clearInterval(tipTimer);
     dash?.stop();
-    await stream.stop();
+    await apiServer.shutdown();
+    await solguard.stop();
   };
 
   let shuttingDown = false;
@@ -131,22 +155,6 @@ async function main() {
     console.error("Unhandled Rejection:", reason);
     process.exit(1);
   });
-
-  try {
-    for await (const ev of stream.queue) {
-      if (ev.kind === "slot") {
-        oracle.ingest(ev);
-        lifecycle.onSlotStatus(Number(ev.slot), ev.status, ev.ts);
-        // refresh congestion snapshot cheaply on confirmed transitions
-        if (ev.status === "confirmed") lastCongestion = oracle.snapshot();
-      } else {
-        // tx subscription runs at PROCESSED commitment; slot-status promotes it
-        lifecycle.onTxEvent(ev, "processed");
-      }
-    }
-  } finally {
-    await cleanup();
-  }
 }
 
 function latestStage(stages: Record<string, unknown>): string {

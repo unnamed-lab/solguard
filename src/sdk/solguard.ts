@@ -97,6 +97,22 @@ export class SolGuard {
     this.submitCooldownMs = cfg.submitCooldownMs ?? Number(process.env.LIVE_SUBMIT_COOLDOWN_MS ?? 20_000);
   }
 
+  getStream(): StreamManager | undefined {
+    return this.stream;
+  }
+
+  getOracle(): CongestionOracle | undefined {
+    return this.oracle;
+  }
+
+  getLeader(): LeaderWindowDetector | undefined {
+    return this.leader;
+  }
+
+  getLifecycle(): LifecycleTracker | undefined {
+    return this.lifecycle;
+  }
+
   /** Initialize the Yellowstone stream manager and other background observation loops */
   async start(): Promise<void> {
     if (this.initialized) return;
@@ -203,6 +219,28 @@ export class SolGuard {
 
     // 2. Parse transaction input format
     const parsed = this.parseTransactionInput(txInput);
+
+    // Dynamically track all signing accounts in the Yellowstone stream to ensure we catch landing events
+    if (this.stream) {
+      const keys: string[] = [];
+      if (parsed instanceof VersionedTransaction) {
+        const numSignatures = parsed.message.header.numRequiredSignatures;
+        for (let i = 0; i < numSignatures; i++) {
+          const key = parsed.message.staticAccountKeys[i];
+          if (key) keys.push(key.toBase58());
+        }
+      } else if (parsed instanceof Transaction) {
+        for (const signature of parsed.signatures) {
+          if (signature.publicKey) {
+            keys.push(signature.publicKey.toBase58());
+          }
+        }
+      }
+      if (keys.length > 0) {
+        log.info("Dynamically tracking accounts on stream", { accounts: keys });
+        this.stream.trackAccounts(keys);
+      }
+    }
 
     // 3. Track is-presigned flag
     const isPresigned = !(Array.isArray(parsed));

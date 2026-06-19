@@ -1,4 +1,6 @@
 import http from "node:http";
+import { fileURLToPath } from "node:url";
+import { realpathSync } from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { SolGuard } from "./sdk/solguard.js";
 import { bridge } from "./events/bridge.js";
@@ -13,19 +15,7 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "content-type",
 };
 
-async function main() {
-  log.info("Starting SolGuard API Server...", { port: PORT });
-
-  const solguard = new SolGuard();
-
-  try {
-    await solguard.start();
-    log.info("SolGuard SDK started — stream connected.");
-  } catch (err) {
-    log.error("Failed to start SolGuard core stream", { err: String(err) });
-    process.exit(1);
-  }
-
+export function startServer(solguard: SolGuard, port = PORT) {
   // ── SSE client registries ──────────────────────────────────────────────────
   const bundleSseClients = new Set<http.ServerResponse>();
   const decisionSseClients = new Set<http.ServerResponse>();
@@ -42,8 +32,11 @@ async function main() {
     }
   }
 
-  bridge.on("bundle_event", (data) => ssePush(bundleSseClients, "bundle_event", data));
-  bridge.on("decision_event", (data) => ssePush(decisionSseClients, "decision_event", data));
+  const bundleHandler = (data: any) => ssePush(bundleSseClients, "bundle_event", data);
+  const decisionHandler = (data: any) => ssePush(decisionSseClients, "decision_event", data);
+
+  bridge.on("bundle_event", bundleHandler);
+  bridge.on("decision_event", decisionHandler);
 
   // ── HTTP server ────────────────────────────────────────────────────────────
   const server = http.createServer(async (req, res) => {
@@ -151,7 +144,6 @@ async function main() {
     wsClients.add(ws);
     log.info("WS client connected", { total: wsClients.size });
 
-    // Send current snapshot immediately so the UI doesn't wait for the first slot
     const snap = solguard.status();
     if (snap.congestion) {
       try {
@@ -163,7 +155,7 @@ async function main() {
             jitoLeaderSlot: null,
           })
         );
-      } catch { /* client may disconnect before first send */ }
+      } catch { /* ignore */ }
     }
 
     ws.on("close", () => {
@@ -184,7 +176,7 @@ async function main() {
     }
   }
 
-  bridge.on("telemetry", (data) => {
+  const telemetryHandler = (data: any) => {
     wsBroadcast(JSON.stringify({ type: "slot_update", slot: data.slot }));
     wsBroadcast(
       JSON.stringify({
@@ -197,7 +189,9 @@ async function main() {
     if (data.tipFloor) {
       wsBroadcast(JSON.stringify({ type: "tip_update", tipFloor: data.tipFloor }));
     }
-  });
+  };
+
+  bridge.on("telemetry", telemetryHandler);
 
   server.on("upgrade", (req, socket, head) => {
     const path = new URL(req.url ?? "", "http://localhost").pathname;
@@ -208,8 +202,8 @@ async function main() {
     }
   });
 
-  server.listen(PORT, () => {
-    log.info(`API Server listening on http://localhost:${PORT}`);
+  server.listen(port, () => {
+    log.info(`API Server listening on http://localhost:${port}`);
     log.info("  GET  /health");
     log.info("  POST /submit");
     log.info("  GET  /sse/bundles");
@@ -218,27 +212,63 @@ async function main() {
   });
 
   const shutdown = async () => {
-    log.info("Graceful shutdown initiated...");
+    log.info("Graceful API Server shutdown initiated...");
     wss.close();
+    bridge.off("bundle_event", bundleHandler);
+    bridge.off("decision_event", decisionHandler);
+    bridge.off("telemetry", telemetryHandler);
     for (const res of bundleSseClients) { try { res.end(); } catch { /* ignore */ } }
     for (const res of decisionSseClients) { try { res.end(); } catch { /* ignore */ } }
-    server.close(async () => {
-      try {
-        await solguard.stop();
-        log.info("SolGuard stopped.");
-        process.exit(0);
-      } catch (err) {
-        log.error("Error stopping SolGuard", { err: String(err) });
-        process.exit(1);
-      }
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
     });
   };
 
-  process.on("SIGINT", () => void shutdown());
-  process.on("SIGTERM", () => void shutdown());
+  return { server, shutdown };
 }
 
-main().catch((err) => {
-  log.error("Server crashed", { err: String(err) });
-  process.exit(1);
-});
+async function main() {
+  log.info("Starting SolGuard API Server standalone...", { port: PORT });
+
+  const solguard = new SolGuard();
+
+  try {
+    await solguard.start();
+    log.info("SolGuard SDK started — stream connected.");
+  } catch (err) {
+    log.error("Failed to start SolGuard core stream", { err: String(err) });
+    process.exit(1);
+  }
+
+  const { shutdown } = startServer(solguard, PORT);
+
+  const handleShutdown = async () => {
+    log.info("Graceful shutdown initiated...");
+    await shutdown();
+    await solguard.stop();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", () => void handleShutdown());
+  process.on("SIGTERM", () => void handleShutdown());
+}
+
+const isMain = (() => {
+  try {
+    if (!process.argv[1]) return false;
+    const mainPath = realpathSync(process.argv[1]);
+    const thisPath = fileURLToPath(import.meta.url);
+    return mainPath === thisPath || 
+           process.argv[1].endsWith("server.ts") || 
+           process.argv[1].endsWith("server.js");
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  main().catch((err) => {
+    log.error("Server crashed", { err: String(err) });
+    process.exit(1);
+  });
+}

@@ -29,6 +29,7 @@
     "test:sniper": "tsx scripts/test-sniper.ts",
     "test:budget": "tsx scripts/test-tip-budget.ts",
     "test:sandwich": "tsx scripts/test-sandwich-guard.ts",
+    "test:api:submit": "tsx scripts/test-api-submit.ts",
     "server": "tsx src/server.ts",
     "server:watch": "tsx watch src/server.ts"
   },
