@@ -101,25 +101,52 @@ async function main() {
   dash?.start();
 
   // fan out stream events
-  const cleanup = () => {
+  const cleanup = async () => {
     clearInterval(leaderTimer);
     clearInterval(tipTimer);
     dash?.stop();
+    await stream.stop();
   };
 
-  for await (const ev of stream.queue) {
-    if (ev.kind === "slot") {
-      oracle.ingest(ev);
-      lifecycle.onSlotStatus(Number(ev.slot), ev.status, ev.ts);
-      // refresh congestion snapshot cheaply on confirmed transitions
-      if (ev.status === "confirmed") lastCongestion = oracle.snapshot();
-    } else {
-      // tx subscription runs at PROCESSED commitment; slot-status promotes it
-      lifecycle.onTxEvent(ev, "processed");
-    }
-  }
+  let shuttingDown = false;
+  const handleShutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info(`received ${signal}, shutting down...`);
+    await cleanup();
+    process.exit(0);
+  };
 
-  cleanup();
+  process.on("SIGINT", () => void handleShutdown("SIGINT"));
+  process.on("SIGTERM", () => void handleShutdown("SIGTERM"));
+
+  process.on("uncaughtException", (err) => {
+    dash?.stop();
+    console.error("Uncaught Exception:", err);
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    dash?.stop();
+    console.error("Unhandled Rejection:", reason);
+    process.exit(1);
+  });
+
+  try {
+    for await (const ev of stream.queue) {
+      if (ev.kind === "slot") {
+        oracle.ingest(ev);
+        lifecycle.onSlotStatus(Number(ev.slot), ev.status, ev.ts);
+        // refresh congestion snapshot cheaply on confirmed transitions
+        if (ev.status === "confirmed") lastCongestion = oracle.snapshot();
+      } else {
+        // tx subscription runs at PROCESSED commitment; slot-status promotes it
+        lifecycle.onTxEvent(ev, "processed");
+      }
+    }
+  } finally {
+    await cleanup();
+  }
 }
 
 function latestStage(stages: Record<string, unknown>): string {
@@ -128,18 +155,6 @@ function latestStage(stages: Record<string, unknown>): string {
   }
   return "submitted";
 }
-
-let shuttingDown = false;
-async function shutdown(stream?: StreamManager) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  log.info("shutting down");
-  await stream?.stop();
-  process.exit(0);
-}
-
-process.on("SIGINT", () => void shutdown());
-process.on("SIGTERM", () => void shutdown());
 
 // Check if this module is being run directly as a script
 const isMain = (() => {

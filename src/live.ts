@@ -122,11 +122,36 @@ async function main() {
   }, 1000);
 
   // Fan out stream events (same as the orchestrator).
-  const cleanup = () => {
+  const cleanup = async () => {
     clearInterval(leaderTimer);
     clearInterval(loopTimer);
     dash?.stop();
+    await stream.stop();
   };
+
+  let shuttingDown = false;
+  const handleShutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info(`received ${signal}, shutting down...`);
+    await cleanup();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", () => void handleShutdown("SIGINT"));
+  process.on("SIGTERM", () => void handleShutdown("SIGTERM"));
+
+  process.on("uncaughtException", (err) => {
+    dash?.stop();
+    console.error("Uncaught Exception:", err);
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    dash?.stop();
+    console.error("Unhandled Rejection:", reason);
+    process.exit(1);
+  });
 
   // Drain the stream so the oracle/lifecycle stay live. This runs forever.
   (async () => {
@@ -139,7 +164,7 @@ async function main() {
         lifecycle.onTxEvent(ev, "processed");
       }
     }
-    cleanup();
+    void cleanup();
   })();
 
   // -------------------------------------------------------------------------
@@ -310,12 +335,6 @@ async function main() {
     return false;
   }
 
-  process.on("SIGINT", () => {
-    log.info("shutting down");
-    void stream.stop();
-    cleanup();
-    process.exit(0);
-  });
 }
 
 interface AgentOverride {
