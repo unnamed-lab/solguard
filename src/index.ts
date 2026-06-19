@@ -13,7 +13,10 @@ import { walletPubkey } from "./solana/connection.js";
 import { CongestionOracle, type CongestionSnapshot } from "./network/congestion.js";
 import { LeaderWindowDetector, type LeaderWindow } from "./network/leader.js";
 import { LifecycleTracker } from "./lifecycle/tracker.js";
-import { Dashboard, type DashboardState } from "./dashboard/ui.js";
+import { Dashboard, type DashboardState, type AgentDecisionRow } from "./dashboard/ui.js";
+import { tipFloorService } from "./tips/tipFloor.js";
+import type { TipFloor } from "./tips/tipFloor.js";
+import { computeTip } from "./tips/model.js";
 import { logger } from "./util/log.js";
 
 export { SolGuard } from "./sdk/solguard.js";
@@ -35,6 +38,9 @@ async function main() {
 
   await stream.start();
 
+  const startedAt = Date.now();
+  const tipSvc = tipFloorService();
+
   // poll the Jito leader window on a light cadence
   let leaderWindow: LeaderWindow | undefined;
   const leaderTimer = setInterval(async () => {
@@ -45,6 +51,33 @@ async function main() {
     }
   }, 1500);
 
+  // poll the tip floor every 30 s
+  let lastTipFloor: TipFloor | undefined;
+  let computedTipLamports: number | undefined;
+  let computedTipPercentile: string | undefined;
+  const tipTimer = setInterval(async () => {
+    try {
+      lastTipFloor = await tipSvc.get();
+      // snapshot the tip we'd use right now, given current congestion
+      if (lastTipFloor && lastCongestion) {
+        const td = computeTip({
+          tipFloor: lastTipFloor,
+          congestionMultiplier: lastCongestion.congestionMultiplier,
+          urgency: "normal",
+        });
+        computedTipLamports = td.lamports;
+        computedTipPercentile = td.percentileKey;
+      }
+    } catch (err) {
+      log.debug("tip floor poll failed", { err: String(err) });
+    }
+  }, 30_000);
+  // warm-start: fetch immediately in the background
+  void tipSvc.get().then((tf) => { lastTipFloor = tf; }).catch(() => {});
+
+  // rolling 10-entry decision history for the dashboard
+  const decisionHistory: AgentDecisionRow[] = [];
+
   // dashboard
   let lastCongestion: CongestionSnapshot | undefined;
   const dash = useDashboard
@@ -52,12 +85,17 @@ async function main() {
         stream: stream.metrics(),
         congestion: lastCongestion,
         leader: leaderWindow,
+        tipFloor: lastTipFloor,
+        computedTipLamports,
+        computedTipPercentile,
         bundles: lifecycle.active().map((e) => ({
           bundleId: e.bundle_id,
           attempt: e.attempt,
           stage: latestStage(e.stages),
           tipLamports: e.tip_lamports,
         })),
+        decisionHistory: [...decisionHistory],
+        startedAt,
       }))
     : undefined;
   dash?.start();
@@ -65,6 +103,7 @@ async function main() {
   // fan out stream events
   const cleanup = () => {
     clearInterval(leaderTimer);
+    clearInterval(tipTimer);
     dash?.stop();
   };
 
