@@ -11,7 +11,10 @@ export class JsonlWriter {
   }
 
   append(entry: unknown): void {
-    appendFileSync(this.path, JSON.stringify(entry, bigintReplacer) + "\n");
+    // Leading \n ensures a fresh line even if a prior concurrent write
+    // dropped its trailing newline (cross-process race on Windows).
+    // Blank lines are ignored by JSONL parsers.
+    appendFileSync(this.path, "\n" + JSON.stringify(entry, bigintReplacer) + "\n");
   }
 }
 
