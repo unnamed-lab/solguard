@@ -492,7 +492,8 @@ export class Dashboard {
         PANEL_W, INDIGO
       ));
       out.push(boxMid(PANEL_W, INDIGO));
-      for (const b of s.bundles.slice(0, 4)) {
+      const sortedBundles = [...s.bundles].reverse();
+      for (const b of sortedBundles.slice(0, 4)) {
         const id  = a(b.bundleId.slice(0, 8) + "…", FG_CYAN);
         const att = a(`#${b.attempt}`, b.attempt > 1 ? ORANGE : SLATE);
         const tip = a(lamports(b.tipLamports), LIME);
@@ -501,8 +502,8 @@ export class Dashboard {
           PANEL_W, INDIGO
         ));
       }
-      if (s.bundles.length > 4) {
-        out.push(boxRow(a(`  … ${s.bundles.length - 4} more bundles`, SLATE), PANEL_W, INDIGO));
+      if (sortedBundles.length > 4) {
+        out.push(boxRow(a(`  … ${sortedBundles.length - 4} more bundles`, SLATE), PANEL_W, INDIGO));
       }
     }
     out.push(boxBot(PANEL_W, INDIGO));

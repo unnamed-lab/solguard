@@ -360,20 +360,36 @@ export class SolGuard {
     }
 
     // Submit bundle
-    const result = await submitBundle(built);
-    this.lifecycle!.track(result, ctx.attempt, currentSlot);
+    let result: any;
+    if (opts.simulateFault && ctx.attempt === 1) {
+      const generatedId = `sim_bundle_${Math.random().toString(36).substring(2, 11)}`;
+      log.info("Simulating fault: skipping Jito RPC submission", { bundleId: generatedId, fault: opts.simulateFault });
+      result = {
+        bundleId: generatedId,
+        signatures: built.signatures,
+        tipLamports: built.tipLamports,
+        tipAccount: built.tipAccount,
+        submittedAt: Date.now(),
+        blockhash: built.blockhash,
+        lastValidBlockHeight: built.lastValidBlockHeight,
+      };
+      this.lifecycle!.track(result, ctx.attempt, currentSlot);
+    } else {
+      result = await submitBundle(built);
+      this.lifecycle!.track(result, ctx.attempt, currentSlot);
 
-    // If Jito marks the bundle Invalid early (no auth token / deprioritised),
-    // fall back to a direct sendTransaction so the tx still lands via normal TPU.
-    this.jitoInvalidFallback(result.bundleId, built).catch((err) =>
-      log.debug("jito-invalid RPC fallback error", { err: String(err) })
-    );
+      // If Jito marks the bundle Invalid early (no auth token / deprioritised),
+      // fall back to a direct sendTransaction so the tx still lands via normal TPU.
+      this.jitoInvalidFallback(result.bundleId, built).catch((err) =>
+        log.debug("jito-invalid RPC fallback error", { err: String(err) })
+      );
+    }
 
     // Wait for confirmation on Yellowstone stream
     const landed = (opts.simulateFault && ctx.attempt === 1)
       ? false
       : await this.awaitConfirmation(result.bundleId);
-    const lifecycleEntry = this.lifecycle!.get(result.bundleId) || {
+    const lifecycleEntry = this.lifecycle!.get(result.bundleId) || ({
       bundle_id: result.bundleId,
       signatures: result.signatures,
       tip_lamports: tipLamports,
@@ -383,7 +399,7 @@ export class SolGuard {
       deltas_ms: {},
       failure: null,
       confirmed_via: null,
-    };
+    } as LifecycleEntry);
 
     if (landed) {
       return {
