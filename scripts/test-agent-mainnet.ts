@@ -27,6 +27,18 @@ async function main() {
   console.log(c("purple",   "║   SolGuard — Live Mainnet AI Agent Test Harness      ║"));
   console.log(c("purple",   "╚══════════════════════════════════════════════════════╝"));
   console.log(c("dim",      "  4 fault scenarios · Unified API submission · Live Sync\n"));
+  console.log(c("bold" as any, "  DESCRIPTION:"));
+  console.log("    This test demonstrates how SolGuard classifies transaction failures");
+  console.log("    on mainnet and routes them through the unified API server to invoke the");
+  console.log("    AI Agent. The AI Agent evaluates congestion, tip floors, and failure logs");
+  console.log("    to decide whether to RETRY or ABORT the transaction, updating the dashboard.");
+  console.log();
+  console.log(c("dim",      "  SCENARIOS:"));
+  console.log("    S1 - Happy Path (normal submission with no failure)");
+  console.log("    S2 - blockhash_expired (Mid-flight expiry fault -> AI RETRY)");
+  console.log("    S3 - fee_too_low (Dust tip injected -> AI RETRY with competitive tip)");
+  console.log("    S4 - compute_exceeded (Deterministic simulation failure -> AI ABORT)");
+  console.log();
 
   const conn  = connection();
   const payer = wallet();

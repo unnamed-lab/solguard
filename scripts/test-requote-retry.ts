@@ -60,6 +60,17 @@ async function main() {
   console.log(c("purple",   "║   SolGuard — Re-quote Retry Loop                        ║"));
   console.log(c("purple",   "╚════════════════════════════════════════════════════════╝"));
   console.log(c("dim",      "  Use case: slippage failure → re-quote → land\n"));
+  console.log(c("bold" as any, "  DESCRIPTION:"));
+  console.log("    Demonstrates SolGuard's intelligent recovery when a token's price");
+  console.log("    moves beyond your slippage limit. Instead of just failing or naive-retrying");
+  console.log("    with a stale price, SolGuard fetches a fresh quote and resubmits.");
+  console.log();
+  console.log(c("dim",      "  STEPS:"));
+  console.log("    1. Fetches an initial quote from Jupiter (SOL -> JUP) at 1% slippage.");
+  console.log("    2. Submits the transaction simulating a slippage_exceeded fault.");
+  console.log("    3. AI Agent aborts the stale transaction to protect your fill price.");
+  console.log("    4. Client re-quotes Jupiter, widens slippage to 2%, and lands a new bundle.");
+  console.log();
 
   const conn   = connection();
   const payer  = wallet();

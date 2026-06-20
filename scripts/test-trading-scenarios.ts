@@ -30,6 +30,18 @@ async function main() {
   console.log(c("purple",   "║   SolGuard — Trading Scenario Test Harness              ║"));
   console.log(c("purple",   "╚════════════════════════════════════════════════════════╝"));
   console.log(c("dim",      "  5 trader scenarios · Unified API submission · Live Sync\n"));
+  console.log(c("bold" as any, "  DESCRIPTION:"));
+  console.log("    This test harness simulates five realistic transaction failure modes");
+  console.log("    faced by active DeFi traders (e.g. price shifts, network spikes) and");
+  console.log("    shows how SolGuard's server-side AI Agent handles the decision lifecycle.");
+  console.log();
+  console.log(c("dim",      "  SCENARIOS:"));
+  console.log("    S1 - Happy Swap (real SOL -> JUP token swap with no failures)");
+  console.log("    S2 - Stale Quote (blockhash expiration fault -> AI RETRY)");
+  console.log("    S3 - Slippage Exceeded (transaction simulation failure -> AI ABORT)");
+  console.log("    S4 - Jito Leader Skip (temporary slot skip fault -> AI HOLD & cooldown)");
+  console.log("    S5 - Launch Rush Fee Too Low (under-tipped auction loss -> AI RETRY at p95)");
+  console.log();
 
   const conn  = connection();
   const payer = wallet();

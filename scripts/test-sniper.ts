@@ -187,6 +187,16 @@ async function main() {
   console.log(c("purple",   "║   SolGuard — Token Launch Sniper                        ║"));
   console.log(c("purple",   "╚════════════════════════════════════════════════════════╝"));
   console.log(c("dim",      "  Use case: detect → quote → bundle → submit in one slot\n"));
+  console.log(c("bold" as any, "  DESCRIPTION:"));
+  console.log("    Simulates a high-speed token launch sniper scenario. Measures");
+  console.log("    the end-to-end latency of the detection-to-execution pipeline.");
+  console.log();
+  console.log(c("dim",      "  PIPELINE STAGES:"));
+  console.log("    1. DETECT - Pool creation event detected via Yellowstone stream.");
+  console.log("    2. QUOTE  - Fetches dynamic swap quote from Jupiter.");
+  console.log("    3. BUILD  - Builds signed transaction with dynamic Jito tip.");
+  console.log("    4. SUBMIT - Broadcasts bundle to Jito searcher endpoint.");
+  console.log();
 
   const conn  = connection();
   const payer = wallet();

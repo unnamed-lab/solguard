@@ -127,6 +127,14 @@ async function main() {
   console.log(c("purple",   "║   SolGuard — MEV Sandwich Protection                    ║"));
   console.log(c("purple",   "╚════════════════════════════════════════════════════════╝"));
   console.log(c("dim",      "  Use case: public TX (vulnerable) vs bundle (protected)\n"));
+  console.log(c("bold" as any, "  DESCRIPTION:"));
+  console.log("    Demonstrates how Jito private bundles prevent frontrunning and backrunning");
+  console.log("    (sandwich attacks) by bypassing the public mempool scanner networks.");
+  console.log();
+  console.log(c("dim",      "  PATHS COMPARED:"));
+  console.log("    Path A - Public TX (vulnerable mempool propagation sequence)");
+  console.log("    Path B - SolGuard Bundle (private + atomic execution path via Jito)");
+  console.log();
 
   const conn  = connection();
   const payer = wallet();

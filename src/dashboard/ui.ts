@@ -117,6 +117,13 @@ function lamports(n: number): string {
   return `${n}`;
 }
 
+function formatPct(val: number): string {
+  const pct = val * 100;
+  if (pct === 0) return "0%";
+  if (pct < 0.1) return pct.toFixed(2) + "%";
+  return pct.toFixed(1) + "%";
+}
+
 function uptime(startedAt?: number): string {
   if (!startedAt) return "00:00:00";
   const s  = Math.floor((Date.now() - startedAt) / 1000);
@@ -413,7 +420,7 @@ export class Dashboard {
         PANEL_W, ORANGE
       ));
       out.push(boxRow(
-        `${a("skip rate  ", SLATE)}${a((cong.skipRate * 100).toFixed(2) + "%", BOLD, skipCol)}` +
+        `${a("skip rate  ", SLATE)}${a(formatPct(cong.skipRate), BOLD, skipCol)}` +
         `  ${a("p2c p50  ", SLATE)}${a(cong.p2cMsP50 + " ms", BOLD, p50Col)}` +
         `  ${a("p95  ", SLATE)}${a(cong.p2cMsP95 + " ms", BOLD, p95Col)}` +
         `  ${a("n=" + cong.sampleCount, SLATE)}`,

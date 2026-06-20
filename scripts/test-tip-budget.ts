@@ -67,6 +67,16 @@ async function main() {
   console.log(c("purple",   "║   SolGuard — Tip Budget Cap                             ║"));
   console.log(c("purple",   "╚════════════════════════════════════════════════════════╝"));
   console.log(c("dim", "  Session budget derived from live tip floor after bootstrap.\n"));
+  console.log(c("bold" as any, "  DESCRIPTION:"));
+  console.log("    To prevent bleeding SOL on tips during persistent network congestion,");
+  console.log("    SolGuard allows setting a hard session cap on Jito tip spend. The AI");
+  console.log("    Agent monitors remaining budget and aborts when tips are exhausted.");
+  console.log();
+  console.log(c("dim",      "  SCENARIOS:"));
+  console.log("    S1 - Budget Healthy (Jito skip -> AI retries with competitive tip)");
+  console.log("    S2 - Budget Shrinking (Low fee -> AI retries with p50/p75 tip)");
+  console.log("    S3 - Budget Depleted (Jito skip -> AI aborts because budget is exhausted)");
+  console.log();
 
   const conn  = connection();
   const payer = wallet();
